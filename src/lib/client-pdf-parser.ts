@@ -33,7 +33,7 @@ export async function extractTextFromPDFClient(
   options?: ClientExtractionOptions
 ): Promise<ClientExtractionResult> {
   try {
-    const pdfjs = await import("pdfjs-dist");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
     // Served from /public (copied from the installed pdfjs-dist); the unpkg CDN worker was blocked/mismatched and broke parsing.
     if (typeof window !== "undefined") {

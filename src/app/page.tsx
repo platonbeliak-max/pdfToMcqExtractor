@@ -156,6 +156,13 @@ export default function Home() {
       });
 
       const arrayBuffer = await file.arrayBuffer();
+      // pdf.js transfers (detaches) the buffer it receives, so keep a copy for the engine fallback.
+      const engineBytes = arrayBuffer.slice(0);
+      const runEngine = async () => {
+        setProgress({ step: "detecting_questions", message: "Running universal engine (Moodle / LMS / Cyrillic)...", percent: 88 });
+        const { extractWithEngine } = await import("@/lib/ingestion/to-mcq");
+        return extractWithEngine(engineBytes, { ocr: options.useOcr === "force" ? "force" : "auto" });
+      };
       const clientRes = await extractTextFromPDFClient(
         arrayBuffer,
         (curr, total, msg) => {
@@ -169,7 +176,17 @@ export default function Home() {
       );
 
       if (!clientRes.success) {
-        throw new Error(clientRes.error || "Failed to extract text from PDF.");
+        const legacyError = clientRes.error || "Failed to extract text from PDF.";
+        const engineRes = await runEngine().catch((e) => {
+          console.error("Engine fallback failed:", e);
+          return null;
+        });
+        if (!engineRes) throw new Error(legacyError);
+        clientRes.success = true;
+        clientRes.pages = [];
+        clientRes.fullText = "";
+        clientRes.totalPages = engineRes.pageCount;
+        extractedQuestions = engineRes.questions;
       }
 
       // If AI extraction requested, send clean JSON text to /api/extract
@@ -215,6 +232,15 @@ export default function Home() {
         });
 
         extractedQuestions = parseMCQDocument(clientRes.pages, clientRes.fullText);
+        if (extractedQuestions.length === 0) {
+          try {
+            extractedQuestions = (await runEngine()).questions;
+          } catch (e) {
+            console.warn("Engine fallback failed:", e);
+          }
+        }
+      }
+      if (!computedStats || computedStats.totalQuestions !== extractedQuestions.length) {
         computedStats = {
           totalQuestions: extractedQuestions.length,
           answeredCount: extractedQuestions.filter((q) => q.status === "answered").length,

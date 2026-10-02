@@ -9,7 +9,7 @@ import type { PageInput, RawImageRegion, RawTextItem } from "./types";
  * here — that is the server engine's job.
  */
 
-type PdfJs = typeof import("pdfjs-dist");
+type PdfJs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 type PdfDoc = Awaited<ReturnType<PdfJs["getDocument"]>["promise"]>;
 type PdfPage = Awaited<ReturnType<PdfDoc["getPage"]>>;
 type TessWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
@@ -17,7 +17,7 @@ type TessWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker
 const MIN_TEXT_LAYER_CHARS = 25;
 
 export async function openPdf(data: ArrayBuffer): Promise<PdfDoc> {
-  const pdfjs = await import("pdfjs-dist");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   // Served from /public (copied from pdfjs-dist) so it always matches the installed version and needs no CDN.
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
   return pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise;
@@ -122,7 +122,7 @@ export interface ExtractOptions {
 }
 
 export async function* extractPages(doc: PdfDoc, opts: ExtractOptions = {}): AsyncGenerator<PageInput> {
-  const pdfjs = await import("pdfjs-dist");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const mode = opts.ocr ?? "auto";
   let worker: TessWorker | null = null;
   const getWorker = async () => {
