@@ -19,6 +19,7 @@ import {
   isPrivateUseGlyph,
   looksLikeFormula,
   normalizeForMatch,
+  stripLmsChrome,
   stripMarkGlyphs,
   toLatex,
   unionBBox,
@@ -279,7 +280,7 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
   const stemRaw = stemParts.join(" ").replace(/⟫\s*⟪/g, " ");
   const responses = [...stemRaw.matchAll(/⟪([^⟫]*)⟫/g)].map((m) => cleanDisplayText(m[1])).filter(Boolean);
   const studentResponse = responses.length ? responses.join(" ") : null;
-  const stem = cleanDisplayText(stripMarkGlyphs(stemRaw.replace(/⟪[^⟫]*⟫/g, " ").replace(/[⟪⟫]/g, "")).text);
+  const stem = stripLmsChrome(cleanDisplayText(stripMarkGlyphs(stemRaw.replace(/⟪[^⟫]*⟫/g, " ").replace(/[⟪⟫]/g, "")).text));
 
   // Tables: ≥2 consecutive lines with the same (≥2) cell count.
   const tables: TableAsset[] = [];

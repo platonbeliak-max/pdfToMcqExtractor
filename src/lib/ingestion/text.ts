@@ -37,6 +37,21 @@ export function cleanDisplayText(s: string): string {
     .trim();
 }
 
+/**
+ * Removes UI chrome that OCR picks up from phone screenshots of an LMS:
+ * the "flag question" button, the browser address bar and the status bar
+ * clock/battery cluster, plus stray box-drawing symbols around them.
+ */
+export function stripLmsChrome(s: string): string {
+  return s
+    .replace(/Отметить\s+вопрос|Flag\s+question/gi, " ")
+    .replace(/\b[\w-]+(?:\.[\w-]+)*\.(?:by|ru|com|org|net|ua|kz|edu|info)\b\S*/gi, " ")
+    .replace(/\b\d{1,2}:\d{2}\s+\d{1,3}\s+[a-zA-Z]{2,4}\s+\d{1,3}(?:\s*\(\s*\w{1,3}\s*\)?)?/g, " ")
+    .replace(/(^|\s)[|\\@©™&$`]+(?=\s|$)/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** Removes mark glyphs (✓ ✕ PUA icons) from a string, returns stripped text and the glyphs. */
 export function stripMarkGlyphs(s: string): { text: string; glyphs: string[] } {
   const glyphs: string[] = [];
