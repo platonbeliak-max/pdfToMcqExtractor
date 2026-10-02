@@ -35,10 +35,9 @@ export async function extractTextFromPDFClient(
   try {
     const pdfjs = await import("pdfjs-dist");
 
-    // Configure worker via CDN for browser runtime
+    // Served from /public (copied from the installed pdfjs-dist); the unpkg CDN worker was blocked/mismatched and broke parsing.
     if (typeof window !== "undefined") {
-      const version = pdfjs.version || "6.3.289";
-      pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
     }
 
     const uint8Data =
