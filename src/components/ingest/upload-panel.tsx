@@ -41,6 +41,7 @@ export function UploadPanel() {
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [bytes, setBytes] = useState<ArrayBuffer | null>(null);
   const [subject, setSubject] = useState("");
   const [ocr, setOcr] = useState<"auto" | "force" | "off">("auto");
   const [phase, setPhase] = useState<Phase>("idle");
@@ -49,28 +50,49 @@ export function UploadPanel() {
   const [dragOver, setDragOver] = useState(false);
   const busy = phase === "reading" || phase === "uploading" || phase === "analyzing";
 
-  const pick = (f: File | undefined) => {
+  // Bytes are read right at selection: browsers revoke access to File handles from cloud
+  // folders (OneDrive, Google Drive) or files moved/overwritten after picking, which surfaces
+  // later as "NotFoundError: A requested file or directory could not be found".
+  const pick = async (f: File | undefined) => {
     if (!f) return;
     if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) {
       setError("Нужен PDF-файл");
       return;
     }
     setError(null);
-    setFile(f);
+    setPhase("idle");
+    setFile(null);
+    setBytes(null);
+    try {
+      const buf = await f.arrayBuffer();
+      if (!buf.byteLength) throw new Error("Файл пустой");
+      setFile(f);
+      setBytes(buf);
+    } catch (e) {
+      setError(
+        `Не удалось прочитать файл «${f.name}»: ${e instanceof Error ? e.message : String(e)}. ` +
+          "Если файл лежит в облачной папке (OneDrive, Google Drive, iCloud) — скачайте его на компьютер и выберите заново.",
+      );
+    } finally {
+      if (inputRef.current) inputRef.current.value = "";
+    }
   };
 
   async function start() {
-    if (!file) return;
+    if (!file || !bytes) return;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setError(null);
     setPhase("reading");
+    let step = "открытие PDF";
     try {
       const { openPdf, extractPages } = await import("@/lib/ingestion/client-extract");
-      const data = await file.arrayBuffer();
-      const doc = await openPdf(data.slice(0));
+      const doc = await openPdf(bytes.slice(0)).catch((e) => {
+        throw new Error(e?.name === "PasswordException" ? "PDF защищён паролем" : `файл не похож на корректный PDF (${e instanceof Error ? e.message : e})`);
+      });
       setProgress({ done: 0, total: doc.numPages });
 
+      step = "создание документа";
       const { id } = await sendJson<{ id: string }>("/api/ingest/documents", "POST", {
         filename: file.name,
         fileSize: file.size,
@@ -82,7 +104,7 @@ export function UploadPanel() {
       const blobTask = (async () => {
         try {
           const { upload } = await import("@vercel/blob/client");
-          const blob = await upload(`documents/${id}/${file.name.replace(/[^\w.\-]+/g, "_")}`, file, {
+          const blob = await upload(`documents/${id}/${file.name.replace(/[^\w.\-]+/g, "_")}`, new Blob([bytes], { type: "application/pdf" }), {
             access: "private",
             handleUploadUrl: `/api/ingest/documents/${id}/file`,
             contentType: "application/pdf",
@@ -105,6 +127,7 @@ export function UploadPanel() {
         setPhase("reading");
       };
 
+      step = "чтение и отправка страниц";
       for await (const page of extractPages(doc, { ocr, signal: ctrl.signal, ocrLang: "rus+eng" })) {
         const size = JSON.stringify(page).length;
         if (batch.length && (batch.length >= BATCH_SIZE || batchBytes + size > MAX_BATCH_BYTES)) await flush();
@@ -115,9 +138,11 @@ export function UploadPanel() {
       await flush();
       await doc.cleanup?.();
 
+      step = "анализ документа";
       setPhase("analyzing");
       await withRetry(() => sendJson(`/api/ingest/documents/${id}/analyze`, "POST"), 2);
-      await blobTask;
+      // The original-PDF upload keeps running after client-side navigation; analysis doesn't depend on it.
+      void blobTask;
       setPhase("done");
       mutate("/api/ingest/documents");
       router.push(`/ingest/documents/${id}`);
@@ -127,7 +152,7 @@ export function UploadPanel() {
         return;
       }
       setPhase("error");
-      setError(e instanceof Error ? e.message : String(e));
+      setError(`Ошибка на шаге «${step}»: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       abortRef.current = null;
     }
@@ -217,7 +242,7 @@ export function UploadPanel() {
               Отменить
             </Button>
           )}
-          <Button variant="primary" onClick={start} disabled={!file || busy}>
+          <Button variant="primary" onClick={start} disabled={!file || !bytes || busy}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <FileUp className="h-4 w-4" aria-hidden="true" />}
             Разобрать документ
           </Button>
