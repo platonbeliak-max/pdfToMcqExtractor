@@ -210,7 +210,7 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
     const stripped = stripMarkGlyphs(firstText);
     glyphs.push(...stripped.glyphs);
     const rawText = ol.lines.map((l) => l.text).join(" ");
-    let text = cleanDisplayText([stripped.text, ...restClean].join(" "));
+    let text = cleanDisplayText([stripped.text, ...restClean].join(" ").replace(/[⟪⟫]/g, ""));
 
     let pairText: string | null = null;
     const pairMatch = text.match(/^(.{2,}?)\s*(?:→|->|⇒|—>|=>)\s*(.{1,})$/);
@@ -274,7 +274,12 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
     if (!best || bestD > tolerance) issues.push("MARK_NOT_ASSOCIATED");
   }
 
-  const stem = cleanDisplayText(stripMarkGlyphs(stemParts.join(" ")).text);
+  // ⟪…⟫ wraps text the extractor found inside an LMS answer field: that's the
+  // student's typed response, not part of the question.
+  const stemRaw = stemParts.join(" ").replace(/⟫\s*⟪/g, " ");
+  const responses = [...stemRaw.matchAll(/⟪([^⟫]*)⟫/g)].map((m) => cleanDisplayText(m[1])).filter(Boolean);
+  const studentResponse = responses.length ? responses.join(" ") : null;
+  const stem = cleanDisplayText(stripMarkGlyphs(stemRaw.replace(/⟪[^⟫]*⟫/g, " ").replace(/[⟪⟫]/g, "")).text);
 
   // Tables: ≥2 consecutive lines with the same (≥2) cell count.
   const tables: TableAsset[] = [];
@@ -381,8 +386,9 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
     internalPage: lines[0].page - ctx.attemptStartPage + 1,
     questionNumber: block.headerNumber,
     sequence: ctx.sequence,
-    rawText: lines.map((l) => l.text).join("\n"),
+    rawText: lines.map((l) => l.text).join("\n").replace(/[⟪⟫]/g, ""),
     stem,
+    studentResponse,
     normalizedStem: normalizeForMatch(stem),
     instruction,
     questionType: type.type,

@@ -1,0 +1,12 @@
+import { readFileSync } from "node:fs";
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
+const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync("public/__real.pdf")), useSystemFonts: true }).promise;
+const page = await doc.getPage(4);
+const ol = await page.getOperatorList();
+const OPS:any = pdfjs.OPS; const name:any = {}; for (const k in OPS) name[OPS[k]] = k;
+let out:string[]=[];
+ol.fnArray.forEach((fn:number,i:number)=>{ const nm=name[fn]; const a:any=ol.argsArray[i];
+ if (nm==="constructPath") out.push(i+" CP mm="+JSON.stringify(a[2]?Array.from(a[2]).map((v:any)=>Math.round(v)):null)+" next="+name[ol.fnArray[i+1]]);
+ else if (["transform","paintFormXObjectBegin","paintImageXObject","save","restore","showText"].includes(nm)) out.push(i+" "+nm+" "+(nm==="transform"||nm==="paintFormXObjectBegin"?JSON.stringify(a).slice(0,80):""));
+});
+console.log(out.slice(0,140).join("\n"));

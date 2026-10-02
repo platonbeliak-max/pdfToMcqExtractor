@@ -29,6 +29,8 @@ export function isPrivateUseGlyph(ch: string): boolean {
 export function cleanDisplayText(s: string): string {
   return s
     .replace(/[\u00AD\u200B-\u200D\uFEFF]/g, "")
+    // Some PDF fonts map Cyrillic "к" to the Latin kra glyph "ĸ" (U+0138).
+    .replace(/\u0138/g, "к")
     .replace(/\u00A0/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\s+([,.;:!?])(\s|$)/g, "$1$2")

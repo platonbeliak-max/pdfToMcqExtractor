@@ -171,6 +171,29 @@ export function determineAnswer(q: QuestionInstance): QuestionInstance {
     }
   }
 
+  // 2b. Typed response in an answer field, graded by the score.
+  const response = q.options.length === 0 ? q.studentResponse?.trim() : null;
+  if (response && !textAnswer && status === "UNRESOLVED") {
+    ev({ type: "STUDENT_RESPONSE", source: "DOCUMENT", optionId: null, polarity: null, confidence: 0.9, page: q.physicalPage, bbox: null, rawValue: response });
+    const kind = q.score?.kind;
+    if (kind === "FULL_SCORE") {
+      textAnswer = response;
+      complete = true;
+      status = "CONFIRMED_BY_SCORE";
+      confidence = 0.92;
+      reasons.push("Полный балл за введённый ответ");
+    } else if (kind === "PARTIAL_SCORE") {
+      textAnswer = response;
+      status = "NEEDS_REVIEW";
+      confidence = 0.5;
+      reasons.push("Частичный балл за введённый ответ");
+    } else if (kind === "ZERO_SCORE") {
+      reasons.push(`Введённый ответ «${response}» неверный`);
+    } else {
+      reasons.push("Введённый ответ без балла");
+    }
+  }
+
   // 3. Check / cross / selected marks
   const checks = q.visualMarks.filter((m) => (m.type === "CHECKMARK" || m.type === "HANDWRITTEN_CHECK" || m.type === "CIRCLED") && m.associatedOptionId && optIds.has(m.associatedOptionId));
   const crosses = q.visualMarks.filter((m) => (m.type === "CROSS" || m.type === "HANDWRITTEN_CROSS") && m.associatedOptionId && optIds.has(m.associatedOptionId));
@@ -248,7 +271,7 @@ export function determineAnswer(q: QuestionInstance): QuestionInstance {
       status = "NEEDS_REVIEW";
       confidence = Math.min(confidence, 0.5);
     }
-  } else if (status === "UNRESOLVED" && q.score) {
+  } else if (status === "UNRESOLVED" && q.score && !response) {
     reasons.push(q.score.kind === "UNANSWERED" ? "Нет ответа" : "Балл есть, но отметок вариантов не найдено");
   }
 

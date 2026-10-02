@@ -17,7 +17,7 @@ const RE = {
   headerHash: /^№\s*(\d{1,4})\s*[.:)]?\s*(.*)$/,
   numbered: /^(\d{1,4})\s*([.)])\s*(\S.*)$/,
   status:
-    /^(верно|неверно|частично\s+правильн[а-яёa-z]*|частично\s+верн[а-яёa-z]*|нет\s+ответа|не\s+отвечено|ответ\s+сохран[её]н|не\s+оценено|correct|incorrect|partially\s+correct|not\s+answered|answer\s+saved|not\s+yet\s+answered|requires\s+grading)$/i,
+    /^(верно|неверно|выполнен[оа]?|не\s+выполнен[оа]?|завершено|не\s+завершено|complete|incomplete|частично\s+правильн[а-яёa-z]*|частично\s+верн[а-яёa-z]*|нет\s+ответа|не\s+отвечено|ответ\s+сохран[её]н|не\s+оценено|correct|incorrect|partially\s+correct|not\s+answered|answer\s+saved|not\s+yet\s+answered|requires\s+grading)$/i,
   score:
     /^(?:баллов|балл|баллы|оценка|mark|marks|points?|score)\s*:?\s*([\d.,]+)\s*(?:из|out\s+of|of|\/)\s*([\d.,]+)\s*(?:\(.*\))?$/i,
   scoreMaxOnly: /^(?:максимальный\s+балл|макс\.?\s*балл|marked\s+out\s+of|максимум)\s*:?\s*([\d.,]+)$/i,
@@ -99,6 +99,9 @@ export function parseOptionLine(text: string): OptionMeta | null {
   }
   m = noGlyph.match(RE.bullet);
   if (m) {
+    // "■ a. Text": checkbox before a lettered label keeps the label and records the box state.
+    const inner = RE.bullet.test(m[2]) ? null : parseOptionLine(m[2]);
+    if (inner && inner.kind !== "BULLET") return { ...inner, glyphs: [...glyphs, ...inner.glyphs], bulletGlyph: m[1] };
     return { kind: "BULLET", label: null, number: null, sign: null, code: null, text: m[2].trim(), glyphs, bulletGlyph: m[1] };
   }
   m = noGlyph.match(RE.parenLetter);

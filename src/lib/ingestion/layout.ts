@@ -141,6 +141,9 @@ export function detectRunningNoise(pages: { lines: LayoutLine[]; height: number 
     for (const l of p.lines) {
       const band = l.bbox.y / Math.max(p.height, 1);
       if (band > 0.08 && band < 0.92) continue;
+      // Question side-boxes ("Вопрос 4", "Выполнен", "Баллов: 1 из 1") often sit at the top
+      // of a page; they are structure, not running headers.
+      if (SIDE_META_RE.test(l.text.trim())) continue;
       const key = l.text
         .toLowerCase()
         .replace(/\d+/g, "#")

@@ -33,19 +33,152 @@ const mul = (m: Matrix, n: Matrix): Matrix => [
   m[1] * n[4] + m[3] * n[5] + m[5],
 ];
 
-async function readImages(pdfjs: PdfJs, page: PdfPage, height: number): Promise<RawImageRegion[]> {
+interface Shape {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Stroke-only paths are usually ink annotations, not form controls. */
+  filled: boolean;
+}
+
+/**
+ * Bounds from the path's own coordinates. pdf.js's precomputed minMax is
+ * [0,0,0,0] for curve-only paths (radio-button circles), so it can't be trusted.
+ */
+function pathBounds(OPS: PdfJs["OPS"], args: unknown[]): [number, number, number, number] | null {
+  const opList = args[0] as ArrayLike<number> | undefined;
+  const coords = args[1] as ArrayLike<number> | undefined;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (x: number, y: number) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  if (opList && coords) {
+    let j = 0;
+    for (let k = 0; k < opList.length; k++) {
+      const op = opList[k];
+      if (op === OPS.rectangle) {
+        add(coords[j], coords[j + 1]);
+        add(coords[j] + coords[j + 2], coords[j + 1] + coords[j + 3]);
+        j += 4;
+      } else if (op === OPS.curveTo) {
+        for (let p = 0; p < 6; p += 2) add(coords[j + p], coords[j + p + 1]);
+        j += 6;
+      } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
+        add(coords[j], coords[j + 1]);
+        add(coords[j + 2], coords[j + 3]);
+        j += 4;
+      } else if (op === OPS.moveTo || op === OPS.lineTo) {
+        add(coords[j], coords[j + 1]);
+        j += 2;
+      }
+    }
+  }
+  const mm = args[2] as ArrayLike<number> | null | undefined;
+  if (mm && mm.length >= 4 && (mm[2] - mm[0] > 0 || mm[3] - mm[1] > 0)) {
+    add(mm[0], mm[1]);
+    add(mm[2], mm[3]);
+  }
+  return Number.isFinite(minX) ? [minX, minY, maxX, maxY] : null;
+}
+
+/**
+ * Small square vector shapes are LMS checkboxes / radio buttons (Moodle prints
+ * them as paths, not glyphs). A control with a smaller filled shape inside is
+ * "selected". Each control becomes a synthetic bullet glyph ("■" selected,
+ * "□" empty) so the text engine can attach it to the option on that row.
+ */
+function controlsToItems(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
+  const square = (s: Shape) => s.w >= 4 && s.w <= 14 && s.h >= 4 && s.h <= 14 && s.w / s.h > 0.7 && s.w / s.h < 1.4;
+  const candidates = shapes.filter((s) => s.filled && square(s));
+  const outers: Shape[] = [];
+  for (const s of [...candidates].sort((a, b) => b.w * b.h - a.w * a.h)) {
+    const dup = outers.some((o) => Math.abs(o.x - s.x) < 0.8 && Math.abs(o.y - s.y) < 0.8 && Math.abs(o.w - s.w) < 0.8);
+    const inside = outers.some((o) => s.w < o.w * 0.8 && s.x >= o.x - 0.5 && s.y >= o.y - 0.5 && s.x + s.w <= o.x + o.w + 0.5 && s.y + s.h <= o.y + o.h + 0.5);
+    if (!dup && !inside) outers.push(s);
+  }
+  const items: RawTextItem[] = [];
+  for (const o of outers) {
+    const cy = o.y + o.h / 2;
+    const hasLabel = text.some((t) => t.x > o.x + o.w - 1 && t.x - (o.x + o.w) < 30 && t.y <= cy && t.y + t.h >= cy);
+    if (!hasLabel) continue;
+    const filled = shapes.some(
+      (s) => s !== o && s.filled && s.w <= o.w * 0.8 && s.w >= o.w * 0.25 && s.x >= o.x - 0.5 && s.y >= o.y - 0.5 && s.x + s.w <= o.x + o.w + 0.5 && s.y + s.h <= o.y + o.h + 0.5,
+    );
+    // Align the glyph with the row's text baseline so layout puts it on the option line.
+    const row = text.find((t) => t.x > o.x && t.x - (o.x + o.w) < 30 && t.y <= cy && t.y + t.h >= cy);
+    items.push({ str: filled ? "■" : "□", x: o.x, y: row ? row.y : o.y, w: o.w, h: row ? row.h : o.h });
+  }
+  return items;
+}
+
+/**
+ * Moodle prints short-answer inputs as a standalone filled box with the typed
+ * text inside. Table cells (attempt summary) are rejected because they abut
+ * neighbouring boxes. Text inside a field is wrapped in ⟪…⟫ so the engine can
+ * separate the student's response from the question stem.
+ */
+function markAnswerFields(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
+  const boxes = shapes.filter((s) => s.filled && s.h >= 10 && s.h <= 32 && s.w >= 30 && s.w <= 460);
+  const same = (a: Shape, b: Shape) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Math.abs(a.w - b.w) < 3;
+  const abuts = (a: Shape, b: Shape) =>
+    !same(a, b) &&
+    Math.abs(a.y - b.y) < 2 &&
+    (Math.abs(a.x + a.w - b.x) < 2 || Math.abs(b.x + b.w - a.x) < 2 || (Math.abs(a.x - b.x) < 2 && Math.abs(a.y + a.h - b.y) < 2));
+  const stacked = (a: Shape, b: Shape) => !same(a, b) && Math.abs(a.x - b.x) < 2 && (Math.abs(a.y + a.h - b.y) < 2 || Math.abs(b.y + b.h - a.y) < 2);
+  const fields = boxes.filter((b) => !boxes.some((o) => abuts(b, o) || stacked(b, o)));
+  if (!fields.length) return text;
+  return text.map((t) => {
+    const cx = t.x + Math.max(t.w, 1) / 2;
+    const cy = t.y + t.h / 2;
+    const inField = fields.some((f) => cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h && t.w <= f.w + 2);
+    return inField && t.str.trim() ? { ...t, str: `⟪${t.str}⟫` } : t;
+  });
+}
+
+async function readGraphics(pdfjs: PdfJs, page: PdfPage, height: number): Promise<{ images: RawImageRegion[]; shapes: Shape[] }> {
   const ops = await page.getOperatorList();
   const { OPS } = pdfjs;
   const imageOps = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject, OPS.paintImageXObjectRepeat].filter((x) => x != null));
+  const paintOps = new Set(
+    [OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.stroke, OPS.closeStroke, OPS.closeFillStroke, OPS.closeEOFillStroke].filter((x) => x != null),
+  );
   const stack: Matrix[] = [];
   let ctm: Matrix = [1, 0, 0, 1, 0, 0];
   const out: RawImageRegion[] = [];
+  const shapes: Shape[] = [];
   for (let i = 0; i < ops.fnArray.length; i++) {
     const fn = ops.fnArray[i];
     if (fn === OPS.save) stack.push(ctm);
     else if (fn === OPS.restore) ctm = stack.pop() ?? [1, 0, 0, 1, 0, 0];
     else if (fn === OPS.transform) ctm = mul(ctm, ops.argsArray[i] as Matrix);
-    else if (imageOps.has(fn)) {
+    else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push(ctm);
+      const m = (ops.argsArray[i] as unknown[])?.[0] as Matrix | null;
+      if (m && m.length === 6) ctm = mul(ctm, m);
+    } else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() ?? [1, 0, 0, 1, 0, 0];
+    else if (fn === OPS.constructPath) {
+      if (!paintOps.has(ops.fnArray[i + 1])) continue;
+      if (shapes.length > 4000) continue;
+      const local = pathBounds(OPS, ops.argsArray[i] as unknown[]);
+      if (!local) continue;
+      const corners = [
+        [local[0], local[1]],
+        [local[2], local[1]],
+        [local[0], local[3]],
+        [local[2], local[3]],
+      ];
+      const px = corners.map(([x, y]) => ctm[0] * x + ctm[2] * y + ctm[4]);
+      const py = corners.map(([x, y]) => ctm[1] * x + ctm[3] * y + ctm[5]);
+      const w = Math.max(...px) - Math.min(...px);
+      const h = Math.max(...py) - Math.min(...py);
+      const filled = ops.fnArray[i + 1] !== OPS.stroke && ops.fnArray[i + 1] !== OPS.closeStroke;
+      if ((w <= 20 && h <= 20) || (filled && h >= 10 && h <= 32 && w >= 30 && w <= 460)) shapes.push({ x: Math.min(...px), y: height - Math.max(...py), w, h, filled });
+    } else if (imageOps.has(fn)) {
       const xs = [ctm[4], ctm[4] + ctm[0], ctm[4] + ctm[2], ctm[4] + ctm[0] + ctm[2]];
       const ys = [ctm[5], ctm[5] + ctm[1], ctm[5] + ctm[3], ctm[5] + ctm[1] + ctm[3]];
       const x = Math.min(...xs);
@@ -56,7 +189,7 @@ async function readImages(pdfjs: PdfJs, page: PdfPage, height: number): Promise<
       if (w >= 12 && h >= 12) out.push({ bbox: { x, y: yTop, w, h } });
     }
   }
-  return out.slice(0, 200);
+  return { images: out.slice(0, 200), shapes };
 }
 
 async function readTextLayer(page: PdfPage, height: number): Promise<RawTextItem[]> {
@@ -141,18 +274,31 @@ export async function* extractPages(doc: PdfDoc, opts: ExtractOptions = {}): Asy
       try {
         page = await doc.getPage(n);
         const vp = page.getViewport({ scale: 1 });
-        const [text, images] = await Promise.all([
+        const [text, graphics] = await Promise.all([
           readTextLayer(page, vp.height).catch((e) => {
             readErrors.push(`text: ${e instanceof Error ? e.message : e}`);
             return [] as RawTextItem[];
           }),
-          readImages(pdfjs, page, vp.height).catch((e) => {
+          readGraphics(pdfjs, page, vp.height).catch((e) => {
             readErrors.push(`images: ${e instanceof Error ? e.message : e}`);
-            return [] as RawImageRegion[];
+            return { images: [] as RawImageRegion[], shapes: [] as Shape[] };
           }),
         ]);
+        const images = graphics.images;
         const textLayerChars = text.reduce((s, i) => s + i.str.replace(/\s/g, "").length, 0);
-        result = { pageNumber: n, width: vp.width, height: vp.height, source: "TEXT_LAYER", items: text, images, textLayerChars };
+        let controls: RawTextItem[] = [];
+        try {
+          controls = controlsToItems(graphics.shapes, text);
+        } catch (e) {
+          readErrors.push(`controls: ${e instanceof Error ? e.message : e}`);
+        }
+        let marked = text;
+        try {
+          marked = markAnswerFields(graphics.shapes, text);
+        } catch (e) {
+          readErrors.push(`fields: ${e instanceof Error ? e.message : e}`);
+        }
+        result = { pageNumber: n, width: vp.width, height: vp.height, source: "TEXT_LAYER", items: [...controls, ...marked], images, textLayerChars };
         if (mode === "force" || (mode === "auto" && textLayerChars < MIN_TEXT_LAYER_CHARS)) {
           try {
             const ocr = await readOcr(page, await getWorker());
