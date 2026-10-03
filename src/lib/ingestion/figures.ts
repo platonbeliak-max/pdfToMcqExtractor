@@ -85,6 +85,7 @@ function pageTokens(pg: PageInput): Tok[] {
 function tidyLabel(words: string[]): string {
   const text = words
     .join(" ")
+    .replace(/([а-яё]{3,})([А-ЯЁ][а-яё])/g, "$1 $2")
     .replace(/\s*(?:Вопрос|Question)\s*\d+.*$/i, "")
     .replace(/\s+(?:Выполнен[оа]?|Complete[d]?|Верно|Неверно|Correct|Incorrect)\s*$/i, "")
     .replace(/\s*-\s*/g, "-")

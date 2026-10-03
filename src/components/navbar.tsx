@@ -32,7 +32,7 @@ export function Navbar({
   const { t } = useT();
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/85 dark:bg-slate-900/85 backdrop-blur-md">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 sm:py-0 sm:h-16 flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-4 gap-y-2">
         {/* Brand */}
         <div
           onClick={() => onSelectTab("dashboard")}
@@ -54,10 +54,10 @@ export function Navbar({
         </div>
 
         {/* Center Navigation Tabs conforming to Section 12 */}
-        <nav className="flex items-center gap-1 p-1 rounded-2xl bg-slate-100/80 dark:bg-slate-800/80 text-xs font-bold">
+        <nav aria-label="Main" className="order-last sm:order-none w-full sm:w-auto flex items-center justify-between sm:justify-start gap-1 p-1 rounded-2xl bg-slate-100/80 dark:bg-slate-800/80 text-xs font-bold">
           <button
             onClick={() => onSelectTab("dashboard")}
-            className={`flex items-center gap-1.5 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 flex-1 sm:flex-none justify-center min-h-9 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
               activeTab === "dashboard"
                 ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-2xs"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
@@ -69,7 +69,7 @@ export function Navbar({
 
           <button
             onClick={() => onSelectTab("upload")}
-            className={`flex items-center gap-1.5 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 flex-1 sm:flex-none justify-center min-h-9 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
               activeTab === "upload"
                 ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-2xs"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
@@ -81,7 +81,7 @@ export function Navbar({
 
           <button
             onClick={() => onSelectTab("bank")}
-            className={`flex items-center gap-1.5 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 flex-1 sm:flex-none justify-center min-h-9 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
               activeTab === "bank"
                 ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-2xs"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
@@ -99,7 +99,7 @@ export function Navbar({
 
           <button
             onClick={() => onSelectTab("test")}
-            className={`flex items-center gap-1.5 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 flex-1 sm:flex-none justify-center min-h-9 px-2.5 lg:px-3 py-1.5 rounded-xl whitespace-nowrap transition-all ${
               activeTab === "test"
                 ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-2xs"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
@@ -111,7 +111,7 @@ export function Navbar({
         </nav>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-auto sm:ml-0">
           {hasExtractedData && onReset && (
             <button
               onClick={onReset}
