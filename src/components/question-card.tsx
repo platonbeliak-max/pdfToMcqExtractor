@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import { MCQQuestion, answerKeys, isCorrectKey } from "@/types/question";
+import { MCQQuestion, answerKeys, isCorrectKey, isFigureQuestion } from "@/types/question";
+import { FigureImage } from "./figure-image";
 import { useT } from "@/lib/i18n";
 import {
   Copy,
@@ -76,7 +77,7 @@ export function QuestionCard({
   };
 
   const options = question.options || {};
-  const optionKeys = Object.keys(options).sort();
+  const optionKeys = Object.keys(options).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
   // Confidence styling
   const confidenceConfig = {
@@ -132,6 +133,11 @@ export function QuestionCard({
               {t("needAnswer")}
             </span>
           )}
+          {isFigureQuestion(question) && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-bold">
+              {t("figBadge")}
+            </span>
+          )}
           {question.tags?.includes("unreadable") && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 font-bold">
               {t("unreadable")}
@@ -158,6 +164,8 @@ export function QuestionCard({
       <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3.5 leading-relaxed select-text">
         {question.question}
       </div>
+
+      {question.imageId && <FigureImage imageId={question.imageId} className="mb-4 max-w-xl" />}
 
       {/* Options Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">

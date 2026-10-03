@@ -264,6 +264,73 @@ async function readOcr(page: PdfPage, worker: TessWorker, scale = 2): Promise<{ 
   return { items, confidence };
 }
 
+/** 16×16 average hash (64 hex chars): near-identical pictures from different attempts land within a small Hamming distance. */
+function averageHash(source: HTMLCanvasElement): string {
+  const c = document.createElement("canvas");
+  c.width = c.height = 16;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return "";
+  ctx.drawImage(source, 0, 0, 16, 16);
+  const px = ctx.getImageData(0, 0, 16, 16).data;
+  const gray: number[] = [];
+  for (let i = 0; i < px.length; i += 4) gray.push(px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114);
+  const avg = gray.reduce((a, b) => a + b, 0) / gray.length;
+  let hex = "";
+  for (let i = 0; i < gray.length; i += 4) {
+    let nib = 0;
+    for (let k = 0; k < 4; k++) nib = (nib << 1) | (gray[i + k] > avg ? 1 : 0);
+    hex += nib.toString(16);
+  }
+  return hex;
+}
+
+/**
+ * Renders part of a page (PDF points, top-left origin) to a JPEG. `masks`
+ * are painted over first so captions printed on slides don't give answers away.
+ */
+export async function renderRegion(
+  doc: PdfDoc,
+  pageNumber: number,
+  bbox: { x: number; y: number; w: number; h: number } | null,
+  masks: { x: number; y: number; w: number; h: number }[] = [],
+  maxWidth = 1000,
+): Promise<{ blob: Blob; hash: string } | null> {
+  const page = await doc.getPage(pageNumber);
+  try {
+    const base = page.getViewport({ scale: 1 });
+    const region = bbox ?? { x: 0, y: 0, w: base.width, h: base.height };
+    const scale = Math.min(4, Math.max(1, maxWidth / Math.max(1, region.w)));
+    const viewport = page.getViewport({ scale });
+    const full = document.createElement("canvas");
+    full.width = Math.ceil(viewport.width);
+    full.height = Math.ceil(viewport.height);
+    const ctx = full.getContext("2d");
+    if (!ctx) return null;
+    await page.render({ canvas: full, canvasContext: ctx, viewport } as Parameters<PdfPage["render"]>[0]).promise;
+    ctx.fillStyle = "#ffffff";
+    for (const m of masks) {
+      const pad = 2;
+      ctx.fillRect((m.x - pad) * scale, (m.y - pad) * scale, (m.w + pad * 2) * scale, (m.h + pad * 2) * scale);
+    }
+    const sx = Math.max(0, Math.floor(region.x * scale));
+    const sy = Math.max(0, Math.floor(region.y * scale));
+    const sw = Math.min(full.width - sx, Math.ceil(region.w * scale));
+    const sh = Math.min(full.height - sy, Math.ceil(region.h * scale));
+    if (sw < 8 || sh < 8) return null;
+    const crop = document.createElement("canvas");
+    crop.width = sw;
+    crop.height = sh;
+    crop.getContext("2d")?.drawImage(full, sx, sy, sw, sh, 0, 0, sw, sh);
+    full.width = full.height = 0;
+    const hash = averageHash(crop);
+    const blob = await new Promise<Blob | null>((r) => crop.toBlob(r, "image/jpeg", 0.85));
+    crop.width = crop.height = 0;
+    return blob ? { blob, hash } : null;
+  } finally {
+    page.cleanup();
+  }
+}
+
 export interface ExtractOptions {
   ocrLang?: string;
   /** "auto" runs OCR only on pages with an empty text layer. */

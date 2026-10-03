@@ -52,6 +52,7 @@ export interface StructuredQuestion {
   createdAt: string;
   updatedAt: string;
   isEdited?: boolean;
+  imageId?: string;
   originalQuestion?: {
     text: string;
     options: QuestionOptionItem[];
@@ -80,6 +81,8 @@ export interface MCQQuestion {
   tags?: string[];
   /** How many times this unique question was found across attempts/documents. */
   attempts?: number;
+  /** Key of a picture saved in the browser image store (labelled-figure questions). */
+  imageId?: string;
 }
 
 /** Splits a stored answer key ("A,C" / "A, C") into individual option keys. */
@@ -265,6 +268,7 @@ export function toStructuredQuestion(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     isEdited: mcq.isEdited,
+    imageId: mcq.imageId,
   };
 }
 
@@ -300,5 +304,8 @@ export function toMCQQuestion(sq: StructuredQuestion): MCQQuestion {
     isEdited: sq.isEdited,
     category: sq.category,
     tags: sq.tags,
+    imageId: sq.imageId,
   };
 }
+
+export const isFigureQuestion = (q: { tags?: string[]; imageId?: string }) => Boolean(q.imageId) || Boolean(q.tags?.includes("figure"));

@@ -1,16 +1,32 @@
 "use client";
 
 import React from "react";
-import { StructuredQuestion, DocumentRecord, answerKeys } from "@/types/question";
+import { StructuredQuestion, DocumentRecord, answerKeys, isFigureQuestion } from "@/types/question";
 import { exportToStandardCSV, downloadCsvFile } from "@/lib/csv-manager";
 import { useT, type TKey } from "@/lib/i18n";
-import { FileText, HelpCircle, CheckCircle2, AlertTriangle, UploadCloud, Download, ArrowRight, BookOpen } from "lucide-react";
+import {
+  FileText,
+  HelpCircle,
+  CheckCircle2,
+  AlertTriangle,
+  UploadCloud,
+  Download,
+  ArrowRight,
+  BookOpen,
+  Trash2,
+  ImageIcon,
+  ClipboardList,
+} from "lucide-react";
 import { useToast } from "./toast";
+import type { TestMode } from "./test-view";
 
 interface DashboardViewProps {
   questions: StructuredQuestion[];
   documents: DocumentRecord[];
   onNavigateTab: (tab: "dashboard" | "upload" | "bank" | "svg-studio") => void;
+  onDeleteDocument: (doc: DocumentRecord) => void;
+  onClearAll: () => void;
+  onStartTest: (mode: TestMode) => void;
 }
 
 function hasAnswer(q: StructuredQuestion) {
@@ -18,10 +34,18 @@ function hasAnswer(q: StructuredQuestion) {
   return !!(q.answer?.text || "").trim();
 }
 
-export function DashboardView({ questions, documents, onNavigateTab }: DashboardViewProps) {
+export function DashboardView({
+  questions,
+  documents,
+  onNavigateTab,
+  onDeleteDocument,
+  onClearAll,
+  onStartTest,
+}: DashboardViewProps) {
   const { showToast } = useToast();
   const { t } = useT();
   const answered = questions.filter(hasAnswer).length;
+  const figures = questions.filter(isFigureQuestion).length;
 
   const handleExportCsv = () => {
     if (questions.length === 0) {
@@ -62,6 +86,24 @@ export function DashboardView({ questions, documents, onNavigateTab }: Dashboard
             >
               <BookOpen className="w-4 h-4" aria-hidden="true" />
               {t("dBrowse")}
+            </button>
+            <button
+              type="button"
+              onClick={() => onStartTest("all")}
+              disabled={questions.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-semibold text-sm"
+            >
+              <ClipboardList className="w-4 h-4" aria-hidden="true" />
+              {t("navTest")}
+            </button>
+            <button
+              type="button"
+              onClick={() => onStartTest("fig")}
+              disabled={figures === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-semibold text-sm"
+            >
+              <ImageIcon className="w-4 h-4" aria-hidden="true" />
+              {t("figTest")} ({figures})
             </button>
           </div>
         </div>
@@ -110,6 +152,9 @@ export function DashboardView({ questions, documents, onNavigateTab }: Dashboard
                     <th className="pb-2 font-semibold">{t("dColPages")}</th>
                     <th className="pb-2 font-semibold">{t("dColQ")}</th>
                     <th className="pb-2 font-semibold">{t("dColStatus")}</th>
+                    <th className="pb-2">
+                      <span className="sr-only">{t("dDelete")}</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -123,6 +168,17 @@ export function DashboardView({ questions, documents, onNavigateTab }: Dashboard
                           <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
                           {t("dReady")}
                         </span>
+                      </td>
+                      <td className="py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => onDeleteDocument(doc)}
+                          aria-label={`${t("dDelete")}: ${doc.fileName}`}
+                          title={t("dDelete")}
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                        >
+                          <Trash2 className="w-4 h-4" aria-hidden="true" />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -151,6 +207,19 @@ export function DashboardView({ questions, documents, onNavigateTab }: Dashboard
             </span>
             <ArrowRight className="w-4 h-4 text-slate-400" aria-hidden="true" />
           </button>
+
+          <div className="mt-auto pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">{t("dClearText")}</p>
+            <button
+              type="button"
+              onClick={onClearAll}
+              disabled={documents.length === 0 && questions.length === 0}
+              className="w-full inline-flex items-center justify-center gap-2 p-3 rounded-xl border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-bold"
+            >
+              <Trash2 className="w-4 h-4" aria-hidden="true" />
+              {t("dClear")}
+            </button>
+          </div>
         </section>
       </div>
     </div>

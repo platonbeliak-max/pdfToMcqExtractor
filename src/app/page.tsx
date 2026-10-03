@@ -33,7 +33,10 @@ import {
   persistQuestions,
   loadSavedDocuments,
   registerDocument,
+  deleteDocumentWithQuestions,
+  clearAllStorage,
 } from "@/lib/question-store";
+import type { TestMode } from "@/components/test-view";
 import {
   Sparkles,
   FileText,
@@ -58,6 +61,7 @@ export default function Home() {
 
   // Persistent Question Bank state
   const [allQuestions, setAllQuestions] = useState<StructuredQuestion[]>([]);
+  const [testMode, setTestMode] = useState<TestMode>("all");
   const [allDocuments, setAllDocuments] = useState<DocumentRecord[]>([]);
 
   // Current upload session state
@@ -396,6 +400,31 @@ export default function Home() {
     }
   };
 
+  const handleDeleteDocument = (doc: DocumentRecord) => {
+    if (!confirm(t("dDeleteConfirm", { name: doc.fileName }))) return;
+    const next = deleteDocumentWithQuestions(doc, allQuestions);
+    setAllDocuments(next.documents);
+    setAllQuestions(next.questions);
+  };
+
+  const handleClearAll = () => {
+    if (!confirm(t("dClearConfirm"))) return;
+    clearAllStorage(STORAGE_KEY);
+    setAllDocuments([]);
+    setAllQuestions([]);
+    setCurrentQuestions([]);
+    setStats(null);
+    setPdfFile(null);
+    setSelectedQuestionId(null);
+    setError(null);
+    setIsBijoyDetected(false);
+  };
+
+  const handleStartTest = (mode: TestMode) => {
+    setTestMode(mode);
+    setActiveTab("test");
+  };
+
   // Filter & Search calculations for review screen
   const filteredQuestions = useMemo(() => {
     return currentQuestions.filter((q) => {
@@ -445,6 +474,9 @@ export default function Home() {
             questions={allQuestions}
             documents={allDocuments}
             onNavigateTab={setActiveTab}
+            onDeleteDocument={handleDeleteDocument}
+            onClearAll={handleClearAll}
+            onStartTest={handleStartTest}
           />
         )}
 
@@ -603,7 +635,7 @@ export default function Home() {
         )}
 
         {activeTab === "test" && (
-          <TestView questions={allQuestions} onGoUpload={() => setActiveTab("upload")} />
+          <TestView key={testMode} questions={allQuestions} initialMode={testMode} onGoUpload={() => setActiveTab("upload")} />
         )}
 
         {/* VIEW D: SVG STUDIO STANDALONE TAB */}

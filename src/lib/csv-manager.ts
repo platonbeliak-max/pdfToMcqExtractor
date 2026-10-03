@@ -163,7 +163,14 @@ export function detectDuplicateQuestions(
       ? (q as StructuredQuestion).question.text
       : (q as MCQQuestion).question;
 
-    const norm = normalizeQuestionForComparison(text);
+    // Every figure question shares one prompt, so its captions are what identify it.
+    const figure = Boolean((q as { imageId?: string }).imageId) || Boolean(q.tags?.includes("figure"));
+    const captions = figure
+      ? Array.isArray(q.options)
+        ? (q as StructuredQuestion).options.map((o) => o.text).join("|")
+        : Object.values((q as MCQQuestion).options).join("|")
+      : "";
+    const norm = normalizeQuestionForComparison(text + captions);
     if (!norm) return;
 
     if (!normalizedMap.has(norm)) {

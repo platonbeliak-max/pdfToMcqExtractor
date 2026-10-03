@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { StructuredQuestion, answerKeys } from "@/types/question";
+import { StructuredQuestion, answerKeys, isFigureQuestion } from "@/types/question";
 import { useT } from "@/lib/i18n";
 import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList } from "lucide-react";
+import { FigureImage } from "./figure-image";
 
 interface TestItem {
   id: string;
@@ -11,9 +12,13 @@ interface TestItem {
   options: { key: string; text: string }[];
   correct: string[];
   textAnswer: string;
+  figure?: { imageId?: string; captions: string[] };
 }
 
-type Answer = { picked: string[]; typed: string };
+type Answer = { picked: string[]; typed: string; labels?: Record<string, string> };
+export type TestMode = "all" | "text" | "fig";
+
+const byNumber = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key, undefined, { numeric: true });
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:!?«»"'()]/g, "").trim();
 
@@ -40,6 +45,18 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
       skipped++;
       continue;
     }
+    if (isFigureQuestion(q) && q.options.length >= 2) {
+      const labels = [...q.options].sort(byNumber);
+      pool.push({
+        id: q.id,
+        text: q.question.text,
+        options: labels,
+        correct: labels.map((o) => o.key),
+        textAnswer: "",
+        figure: { imageId: q.imageId, captions: [...new Set(labels.map((o) => o.text))] },
+      });
+      continue;
+    }
     pool.push({ id: q.id, text: q.question.text, options: q.options, correct, textAnswer });
   }
   return { pool, skipped };
@@ -47,6 +64,7 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
 
 function isRight(item: TestItem, a: Answer | undefined): boolean {
   if (!a) return false;
+  if (item.figure) return item.options.every((o) => a.labels?.[o.key] === o.text);
   if (item.correct.length) {
     const p = [...a.picked].sort().join(",");
     return p === [...item.correct].sort().join(",");
@@ -79,9 +97,23 @@ function textMatches(typed: string, expected: string): boolean {
   return editDistance(a, b) <= Math.floor(b.length / 6);
 }
 
-export function TestView({ questions, onGoUpload }: { questions: StructuredQuestion[]; onGoUpload: () => void }) {
+export function TestView({
+  questions,
+  onGoUpload,
+  initialMode = "all",
+}: {
+  questions: StructuredQuestion[];
+  onGoUpload: () => void;
+  initialMode?: TestMode;
+}) {
   const { t } = useT();
-  const { pool, skipped } = useMemo(() => buildPool(questions), [questions]);
+  const { pool: fullPool, skipped } = useMemo(() => buildPool(questions), [questions]);
+  const [mode, setMode] = useState<TestMode>(initialMode);
+  const figCount = fullPool.filter((it) => it.figure).length;
+  const pool = useMemo(
+    () => fullPool.filter((it) => (mode === "all" ? true : mode === "fig" ? !!it.figure : !it.figure)),
+    [fullPool, mode],
+  );
 
   const [count, setCount] = useState<number>(20);
   const [shuffleOpts, setShuffleOpts] = useState(true);
@@ -95,7 +127,10 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
     const n = count === 0 ? source.length : Math.min(count, source.length);
     const chosen = shuffle(source)
       .slice(0, n)
-      .map((it) => (shuffleOpts ? { ...it, options: shuffle(it.options) } : it));
+      .map((it) => {
+        if (it.figure) return { ...it, figure: { ...it.figure, captions: shuffle(it.figure.captions) } };
+        return shuffleOpts ? { ...it, options: shuffle(it.options) } : it;
+      });
     setItems(chosen);
     setIdx(0);
     setAnswers({});
@@ -103,7 +138,7 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
     setFinished(false);
   };
 
-  if (pool.length === 0) {
+  if (fullPool.length === 0) {
     return (
       <div className="max-w-xl mx-auto p-10 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
         <ClipboardList className="w-10 h-10 text-blue-600 mx-auto mb-3" />
@@ -130,6 +165,36 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
             {skipped > 0 && " " + t("testSkipped", { n: skipped })}
           </p>
         </div>
+
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t("testMode")}</legend>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ["all", t("testModeAll")],
+                ["text", t("testModeText")],
+                ["fig", t("testModeFig", { n: figCount })],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={mode === m}
+                onClick={() => setMode(m)}
+                className={`px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${
+                  mode === m
+                    ? "bg-blue-600 border-blue-600 text-white"
+                    : "border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-blue-500"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {mode === "fig" && figCount === 0 && (
+            <p className="text-sm text-amber-700 dark:text-amber-400 leading-relaxed">{t("testFigNone")}</p>
+          )}
+        </fieldset>
 
         <fieldset className="flex flex-col gap-2">
           <legend className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t("testCount")}</legend>
@@ -159,8 +224,9 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
 
         <button
           type="button"
+          disabled={pool.length === 0}
           onClick={() => start(pool)}
-          className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold"
+          className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold"
         >
           <Play className="w-4 h-4" />
           {t("testStart")}
@@ -200,7 +266,9 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
                 <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 leading-relaxed">{it.text}</p>
                 <p className="text-sm text-emerald-700 dark:text-emerald-400 mt-2 leading-relaxed">
                   {t("correctAnswer")}:{" "}
-                  {it.correct.length
+                  {it.figure
+                    ? it.options.map((o) => `${o.key} — ${o.text}`).join("; ")
+                    : it.correct.length
                     ? it.options.filter((o) => it.correct.includes(o.key)).map((o) => o.text).join("; ")
                     : it.textAnswer}
                 </p>
@@ -214,9 +282,13 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
 
   const item = items[idx];
   const ans = answers[item.id] ?? { picked: [], typed: "" };
-  const multi = item.correct.length > 1;
+  const multi = !item.figure && item.correct.length > 1;
   const right = checked && isRight(item, ans);
-  const canCheck = item.correct.length ? ans.picked.length > 0 : ans.typed.trim().length > 0;
+  const canCheck = item.figure
+    ? item.options.every((o) => ans.labels?.[o.key])
+    : item.correct.length
+      ? ans.picked.length > 0
+      : ans.typed.trim().length > 0;
 
   const toggle = (key: string) => {
     if (checked) return;
@@ -252,7 +324,53 @@ export function TestView({ questions, onGoUpload }: { questions: StructuredQuest
           {multi && <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">{t("testMulti", { n: item.correct.length })}</p>}
         </div>
 
-        {item.correct.length ? (
+        {item.figure ? (
+          <div className="flex flex-col gap-4">
+            {item.figure.imageId && <FigureImage imageId={item.figure.imageId} />}
+            <p className="text-xs font-bold text-blue-600 dark:text-blue-400">{t("testFigHint")}</p>
+            <ol className="flex flex-col gap-2">
+              {item.options.map((o) => {
+                const chosen = ans.labels?.[o.key] ?? "";
+                const ok = chosen === o.text;
+                const tone = !checked
+                  ? "border-slate-200 dark:border-slate-700"
+                  : ok
+                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40"
+                    : "border-red-500 bg-red-50 dark:bg-red-950/40";
+                return (
+                  <li key={o.key} className={`flex flex-col gap-1.5 p-2.5 rounded-2xl border-2 ${tone}`}>
+                    <div className="flex items-center gap-3">
+                      <span className="w-7 h-7 shrink-0 rounded-lg bg-slate-900 dark:bg-slate-100 text-slate-50 dark:text-slate-900 text-sm font-bold flex items-center justify-center">
+                        {o.key}
+                      </span>
+                      <label htmlFor={`fig-${o.key}`} className="sr-only">
+                        {t("question")} {o.key}
+                      </label>
+                      <select
+                        id={`fig-${o.key}`}
+                        value={chosen}
+                        disabled={checked}
+                        onChange={(e) =>
+                          setAnswers({ ...answers, [item.id]: { ...ans, labels: { ...ans.labels, [o.key]: e.target.value } } })
+                        }
+                        className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:border-blue-600 outline-none"
+                      >
+                        <option value="">{t("testFigPick")}</option>
+                        {item.figure!.captions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                      {checked && (ok ? <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /> : <XCircle className="w-4 h-4 shrink-0 text-red-600" />)}
+                    </div>
+                    {checked && !ok && <p className="text-xs text-emerald-700 dark:text-emerald-400 pl-10">{o.text}</p>}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        ) : item.correct.length ? (
           <div className="flex flex-col gap-2" role={multi ? "group" : "radiogroup"}>
             {item.options.map((o) => {
               const picked = ans.picked.includes(o.key);

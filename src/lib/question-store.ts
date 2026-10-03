@@ -12,6 +12,8 @@ import {
   downloadCsvFile,
 } from "./csv-manager";
 import { downloadBulkSvgZip } from "./svg/svg-generator";
+import { stripScoreNoise } from "./ingestion/noise";
+import { clearImages, deleteImages } from "./figure-store";
 
 const STORAGE_QUESTIONS_KEY = "mcq_platform_questions_v2";
 const STORAGE_DOCS_KEY = "mcq_platform_documents_v2";
@@ -50,16 +52,54 @@ export function loadSavedQuestions(): StructuredQuestion[] {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       return parsed.map((item) => {
-        if ("options" in item && Array.isArray(item.options)) {
-          return item as StructuredQuestion;
-        }
-        return toStructuredQuestion(item as MCQQuestion);
+        const sq =
+          "options" in item && Array.isArray(item.options)
+            ? (item as StructuredQuestion)
+            : toStructuredQuestion(item as MCQQuestion);
+        return cleanStoredQuestion(sq);
       });
     }
   } catch (e) {
     console.warn("Failed to load questions from storage:", e);
   }
   return [];
+}
+
+/** Banks saved before score stripping existed still contain "Балл: 1,00" in their text. */
+function cleanStoredQuestion(sq: StructuredQuestion): StructuredQuestion {
+  return {
+    ...sq,
+    question: { ...sq.question, text: stripScoreNoise(sq.question.text) },
+    options: sq.options.map((o) => ({ ...o, text: stripScoreNoise(o.text) })),
+    answer: sq.answer ? { ...sq.answer, text: stripScoreNoise(sq.answer.text || "") } : sq.answer,
+  };
+}
+
+/** Removes a document and every question extracted from it. */
+export function deleteDocumentWithQuestions(
+  doc: DocumentRecord,
+  questions: StructuredQuestion[]
+): { documents: DocumentRecord[]; questions: StructuredQuestion[] } {
+  const documents = loadSavedDocuments().filter((d) => d.id !== doc.id);
+  const remaining = questions.filter(
+    (q) => q.source?.documentId !== doc.id && q.source?.documentName !== doc.fileName
+  );
+  persistDocuments(documents);
+  persistQuestions(remaining);
+  const kept = new Set(remaining.map((q) => q.imageId).filter(Boolean));
+  void deleteImages(
+    questions.map((q) => q.imageId).filter((id): id is string => Boolean(id) && !kept.has(id))
+  );
+  return { documents, questions: remaining };
+}
+
+/** Wipes the whole bank: documents, questions and the current extraction session. */
+export function clearAllStorage(sessionKey: string): void {
+  if (typeof window === "undefined") return;
+  void clearImages();
+  localStorage.removeItem(STORAGE_QUESTIONS_KEY);
+  localStorage.removeItem(STORAGE_DOCS_KEY);
+  localStorage.removeItem(sessionKey);
 }
 
 /**
