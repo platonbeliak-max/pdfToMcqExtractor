@@ -63,7 +63,7 @@ function pageTokens(pg: PageInput): Tok[] {
       prev &&
       !broke &&
       Math.abs(it.y - prev.y) < h * 0.5 &&
-      it.x - (prev.x + prev.w) < h * 0.3 &&
+      it.x - (prev.x + prev.w) < h * 0.1 &&
       it.x >= prev.x &&
       !LABEL_NUM_RE.test(prev.s) &&
       !/\s/.test(s)
@@ -85,6 +85,8 @@ function pageTokens(pg: PageInput): Tok[] {
 function tidyLabel(words: string[]): string {
   const text = words
     .join(" ")
+    .replace(/\s*(?:Вопрос|Question)\s*\d+.*$/i, "")
+    .replace(/\s+(?:Выполнен[оа]?|Complete[d]?|Верно|Неверно|Correct|Incorrect)\s*$/i, "")
     .replace(/\s*-\s*/g, "-")
     .replace(/\s+([,.;:])/g, "$1")
     .replace(/[,;:\s]+$/, "")

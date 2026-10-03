@@ -5,7 +5,8 @@ interface AiAnswerResponse {
   answerText: string;
   explanation: string;
   confidence: "high" | "medium" | "low";
-  sources: { title: string; url: string }[];
+  mode?: "free" | "ai";
+  sources: { title: string; url: string; kind?: "wikipedia" | "pubmed" | "europepmc" }[];
 }
 
 export class AiBillingError extends Error {
@@ -60,6 +61,7 @@ export async function lookupAiAnswer(q: StructuredQuestion): Promise<StructuredQ
     answerOrigin: "ai",
     aiSources: data.sources,
     aiConfidence: data.confidence,
+    aiMode: data.mode ?? "ai",
     status: "review",
     updatedAt: new Date().toISOString(),
   };

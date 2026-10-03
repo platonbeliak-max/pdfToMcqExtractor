@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { StructuredQuestion, answerKeys, isFigureQuestion } from "@/types/question";
 import { useT } from "@/lib/i18n";
-import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye } from "lucide-react";
+import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
 
@@ -65,7 +65,7 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
 
 function isRight(item: TestItem, a: Answer | undefined): boolean {
   if (!a) return false;
-  if (item.figure) return item.options.every((o) => a.labels?.[o.key] === o.text);
+  if (item.figure) return item.options.every((o) => textMatches(a.labels?.[o.key] ?? "", o.text));
   if (item.correct.length) {
     const p = [...a.picked].sort().join(",");
     return p === [...item.correct].sort().join(",");
@@ -124,6 +124,7 @@ export function TestView({
   const [checked, setChecked] = useState(false);
   const [finished, setFinished] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, true>>({});
+  const [hints, setHints] = useState<Record<string, true>>({});
 
   const start = (source: TestItem[]) => {
     const n = count === 0 ? source.length : Math.min(count, source.length);
@@ -137,6 +138,7 @@ export function TestView({
     setIdx(0);
     setAnswers({});
     setRevealed({});
+    setHints({});
     setChecked(false);
     setFinished(false);
   };
@@ -335,11 +337,39 @@ export function TestView({
         {item.figure ? (
           <div className="flex flex-col gap-4">
             {item.figure.imageId && <FigureImage imageId={item.figure.imageId} />}
-            <p className="text-xs font-bold text-blue-600 dark:text-blue-400">{t("testFigHint")}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-bold text-blue-600 dark:text-blue-400">{t("testFigHint")}</p>
+              {!checked && (
+                <button
+                  type="button"
+                  title={t("hFigHint")}
+                  aria-expanded={!!hints[item.id]}
+                  onClick={() => {
+                    const next = { ...hints };
+                    if (next[item.id]) delete next[item.id];
+                    else next[item.id] = true;
+                    setHints(next);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-400"
+                >
+                  <Lightbulb className="w-3.5 h-3.5" />
+                  {hints[item.id] ? t("testFigHintHide") : t("testFigHintShow")}
+                </button>
+              )}
+            </div>
+            {hints[item.id] && !checked && (
+              <ul className="flex flex-wrap gap-1.5" aria-label={t("testFigHintShow")}>
+                {item.figure.captions.map((c) => (
+                  <li key={c} className="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-xs text-amber-900 dark:text-amber-200">
+                    {c}
+                  </li>
+                ))}
+              </ul>
+            )}
             <ol className="flex flex-col gap-2">
               {item.options.map((o) => {
                 const chosen = ans.labels?.[o.key] ?? "";
-                const ok = chosen === o.text;
+                const ok = textMatches(chosen, o.text);
                 const tone = !checked
                   ? "border-slate-200 dark:border-slate-700"
                   : ok
@@ -354,22 +384,28 @@ export function TestView({
                       <label htmlFor={`fig-${o.key}`} className="sr-only">
                         {t("question")} {o.key}
                       </label>
-                      <select
+                      <input
                         id={`fig-${o.key}`}
+                        type="text"
+                        autoComplete="off"
+                        spellCheck={false}
                         value={chosen}
                         disabled={checked}
+                        placeholder={t("testFigPick")}
                         onChange={(e) =>
                           setAnswers({ ...answers, [item.id]: { ...ans, labels: { ...ans.labels, [o.key]: e.target.value } } })
                         }
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return;
+                          e.preventDefault();
+                          if (checked) return next();
+                          const inputs = [...document.querySelectorAll<HTMLInputElement>("input[id^='fig-']")];
+                          const at = inputs.indexOf(e.currentTarget);
+                          if (at >= 0 && at < inputs.length - 1) inputs[at + 1].focus();
+                          else if (canCheck) setChecked(true);
+                        }}
                         className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:border-blue-600 outline-none"
-                      >
-                        <option value="">{t("testFigPick")}</option>
-                        {item.figure!.captions.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
+                      />
                       {checked && (ok ? <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /> : <XCircle className="w-4 h-4 shrink-0 text-red-600" />)}
                     </div>
                     {checked && !ok && <p className="text-xs text-emerald-700 dark:text-emerald-400 pl-10">{o.text}</p>}

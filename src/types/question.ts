@@ -54,8 +54,9 @@ export interface StructuredQuestion {
   isEdited?: boolean;
   imageId?: string;
   answerOrigin?: "file" | "ai";
-  aiSources?: { title: string; url: string }[];
+  aiSources?: { title: string; url: string; kind?: "wikipedia" | "pubmed" | "europepmc" }[];
   aiConfidence?: "high" | "medium" | "low";
+  aiMode?: "free" | "ai";
   originalQuestion?: {
     text: string;
     options: QuestionOptionItem[];

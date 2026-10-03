@@ -561,7 +561,7 @@ export function QuestionBankView({
                     {q.answerOrigin === "ai" && q.answer && (showAnswers || peeked.has(q.id)) && (
                       <div className="mt-1.5 flex flex-col gap-1 rounded-lg bg-sky-50 dark:bg-sky-950/30 px-2.5 py-2 text-slate-600 dark:text-slate-300">
                         <span className="font-bold text-sky-700 dark:text-sky-300">
-                          {t("aiBadge")} · {t(`aiConf_${q.aiConfidence ?? "medium"}`)}
+                          {q.aiMode === "free" ? t("aiBadgeFree") : t("aiBadge")} · {t(`aiConf_${q.aiConfidence ?? "medium"}`)}
                         </span>
                         {q.explanation && <p className="leading-relaxed text-pretty">{q.explanation}</p>}
                         {q.aiSources && q.aiSources.length > 0 && (
