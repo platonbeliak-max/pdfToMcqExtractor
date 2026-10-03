@@ -209,6 +209,8 @@ export function queryQuestionBank(
       filtered = filtered.filter((item) => duplicateMap.has(item.id));
     } else if (filter.status === "approved") {
       filtered = filtered.filter((item) => item.status === "verified");
+    } else if (filter.status === "review") {
+      filtered = filtered.filter((item) => !item.answer);
     } else {
       filtered = filtered.filter((item) => item.status === filter.status);
     }

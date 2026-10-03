@@ -233,8 +233,8 @@ export function QuestionBankView({
         <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
           {[
             { id: "all", label: `${t("all")} (${questions.length})` },
-            { id: "approved", label: t("approved") },
-            { id: "pending", label: t("pending") },
+            { id: "approved", label: `${t("approved")} (${questions.filter((q) => q.status === "verified").length})` },
+            { id: "pending", label: `${t("pending")} (${questions.filter((q) => q.status === "pending").length})` },
             { id: "review", label: `${t("noAnswer")} (${questions.filter((q) => !q.answer).length})` },
             { id: "duplicate", label: `${t("duplicates")} (${duplicateMap.size})` },
           ].map((tab) => (
