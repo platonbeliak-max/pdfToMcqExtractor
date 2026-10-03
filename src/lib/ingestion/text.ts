@@ -34,7 +34,19 @@ export function cleanDisplayText(s: string): string {
     .replace(/\u00A0/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\s+([,.;:!?])(\s|$)/g, "$1$2")
+    .replace(LETTER_SPACED_RUN, collapseLetterSpaced)
     .trim();
+}
+
+// Letter-spaced PDF fonts emit "в а з о к о н с т р икт ор" — runs of five or
+// more 1–3 letter fragments, mostly single letters. Real prose almost never
+// has five short words in a row, so such runs are glued back together.
+const LETTER_SPACED_RUN = /(?:^|(?<=\s))(?:\p{L}{1,3} ){4,}\p{L}{1,3}(?=\s|$|[,.;:!?])/gu;
+
+function collapseLetterSpaced(run: string): string {
+  const parts = run.split(" ");
+  const singles = parts.filter((p) => p.length === 1).length;
+  return singles / parts.length >= 0.6 ? parts.join("") : run;
 }
 
 /**

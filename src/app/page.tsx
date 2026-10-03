@@ -15,6 +15,8 @@ import { useToast } from "@/components/toast";
 import { DashboardView } from "@/components/dashboard-view";
 import { QuestionBankView } from "@/components/question-bank-view";
 import { SvgEditorModal } from "@/components/svg-editor-modal";
+import { TestView } from "@/components/test-view";
+import { useT } from "@/lib/i18n";
 import {
   MCQQuestion,
   StructuredQuestion,
@@ -36,7 +38,6 @@ import {
   Sparkles,
   FileText,
   AlertCircle,
-  AlertTriangle,
   Eye,
   EyeOff,
   Layers,
@@ -87,6 +88,7 @@ export default function Home() {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
 
   const { showToast } = useToast();
+  const { t } = useT();
 
   // Load saved session and persistent question bank on initial render
   useEffect(() => {
@@ -307,24 +309,16 @@ export default function Home() {
           spread: 70,
           origin: { y: 0.6 },
         });
-        showToast(
-          "Extraction Complete!",
-          `Extracted ${extractedQuestions.length} questions into Question Bank`,
-          "success"
-        );
+        showToast(t("toastDoneT"), t("toastExtracted", { n: extractedQuestions.length }), "success");
       } else {
-        showToast(
-          "No Questions Detected",
-          "Ensure document contains Multiple Choice Questions (MCQs)",
-          "info"
-        );
+        showToast(t("toastNone"), t("toastNoneD"), "info");
       }
     } catch (err: unknown) {
       console.error("Extraction failed:", err);
       const msg = err instanceof Error ? err.message : "Failed to process PDF document.";
       setError(msg);
       setProgress({ step: "error", message: msg, percent: 0 });
-      showToast("Extraction Error", msg, "error");
+      showToast(t("toastError"), msg, "error");
     } finally {
       setIsProcessing(false);
     }
@@ -349,7 +343,7 @@ export default function Home() {
       };
       setStats(updatedStats);
     }
-    showToast("Question Saved", "Changes updated in Question Bank", "success");
+    showToast(t("toastSaved"), undefined, "success");
   };
 
   const handleDeleteQuestion = (id: string) => {
@@ -360,7 +354,7 @@ export default function Home() {
     setAllQuestions(nextBank);
     persistQuestions(nextBank);
 
-    showToast("Question Deleted", undefined, "info");
+    showToast(t("toastDeleted"), undefined, "info");
   };
 
   const handleApproveAllCurrent = () => {
@@ -378,7 +372,7 @@ export default function Home() {
     setAllQuestions(nextBank);
     persistQuestions(nextBank);
 
-    showToast("All Approved", `Marked ${approved.length} questions as verified`, "success");
+    showToast(t("toastApproved"), String(approved.length), "success");
   };
 
   const handleSelectQuestion = (q: MCQQuestion) => {
@@ -389,7 +383,7 @@ export default function Home() {
   };
 
   const handleResetSession = () => {
-    if (confirm("Reset current extraction session and upload a new PDF?")) {
+    if (confirm(t("reset"))) {
       setCurrentQuestions([]);
       setStats(null);
       setPdfFile(null);
@@ -398,7 +392,7 @@ export default function Home() {
       setIsBijoyDetected(false);
       localStorage.removeItem(STORAGE_KEY);
       setActiveTab("upload");
-      showToast("Ready for New PDF", "Upload a document to extract questions", "info");
+      
     }
   };
 
@@ -498,39 +492,6 @@ export default function Home() {
                 {/* Stats Card */}
                 {stats && <StatsCard stats={stats} />}
 
-                {/* Bijoy Font Encoding Warning Banner with 1-Click OCR Repair */}
-                {isBijoyDetected && (
-                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                      <div>
-                        <div className="font-bold text-amber-900 dark:text-amber-100 text-sm">
-                          পুরোনো বিজয় / ANSI ফন্ট শনাক্ত হয়েছে (Bijoy Font Encoding Detected)
-                        </div>
-                        <div className="text-xs text-amber-700 dark:text-amber-300 mt-1 leading-relaxed">
-                          এই PDF-টিতে ইউনিকোডের বদলে পুরোনো বিজয় (SutonnyMJ) ফন্ট রয়েছে, যার কারণে সাধারণ টেক্সট এক্সট্রাকশনে অক্ষরগুলো বিকৃত (যেমন &quot;থকানরি&quot; বা &quot;রবশ্ব&quot;) হতে পারে।
-                          ১০০% নিখুঁত করতে নিচের বাটনে ক্লিক করে <strong>OCR মোডে পুনরায় এক্সট্র্যাক্ট</strong> করুন।
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (pdfFile) {
-                          handleStartExtraction(pdfFile, filename, {
-                            useAi: false,
-                            useOcr: "force",
-                          });
-                        }
-                      }}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md transition-all whitespace-nowrap self-start sm:self-auto cursor-pointer"
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      OCR দিয়ে ফিক্স করুন (Fix with OCR)
-                    </button>
-                  </div>
-                )}
-
                 {/* Toolbar */}
                 <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
                   <div className="flex items-center gap-2">
@@ -538,7 +499,7 @@ export default function Home() {
                       {filename}
                     </span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-semibold">
-                      {currentQuestions.length} Questions
+                      {currentQuestions.length} {t("questions")}
                     </span>
                   </div>
 
@@ -549,7 +510,7 @@ export default function Home() {
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      Approve All
+                      {t("approveAll")}
                     </button>
 
                     <button
@@ -560,12 +521,12 @@ export default function Home() {
                       {showPdfPreview ? (
                         <>
                           <EyeOff className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Hide PDF</span>
+                          <span className="hidden sm:inline">{t("hidePdf")}</span>
                         </>
                       ) : (
                         <>
                           <Eye className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Show PDF</span>
+                          <span className="hidden sm:inline">{t("showPdf")}</span>
                         </>
                       )}
                     </button>
@@ -576,7 +537,8 @@ export default function Home() {
                       type="button"
                       onClick={handleResetSession}
                       className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                      title="Upload Another PDF"
+                      title={t("newPdf")}
+                      aria-label={t("newPdf")}
                     >
                       <RefreshCw className="w-4 h-4" />
                     </button>
@@ -615,7 +577,7 @@ export default function Home() {
                       <div className="p-12 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50">
                         <FileText className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                         <h4 className="font-bold text-slate-700 dark:text-slate-300 text-sm">
-                          No matching questions
+                          {t("noMatch")}
                         </h4>
                       </div>
                     ) : (
@@ -638,6 +600,10 @@ export default function Home() {
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === "test" && (
+          <TestView questions={allQuestions} onGoUpload={() => setActiveTab("upload")} />
         )}
 
         {/* VIEW D: SVG STUDIO STANDALONE TAB */}

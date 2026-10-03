@@ -8,11 +8,11 @@ import {
   LayoutDashboard,
   UploadCloud,
   BookOpen,
-  Sparkles,
+  ClipboardCheck,
   RefreshCw,
 } from "lucide-react";
 
-export type PlatformTab = "dashboard" | "upload" | "bank" | "svg-studio";
+export type PlatformTab = "dashboard" | "upload" | "bank" | "test" | "svg-studio";
 
 interface NavbarProps {
   activeTab: PlatformTab;
@@ -98,15 +98,15 @@ export function Navbar({
           </button>
 
           <button
-            onClick={() => onSelectTab("svg-studio")}
+            onClick={() => onSelectTab("test")}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all ${
-              activeTab === "svg-studio"
+              activeTab === "test"
                 ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-2xs"
                 : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            <span>SVG</span>
+            <ClipboardCheck className="w-3.5 h-3.5" />
+            <span>{t("navTest")}</span>
           </button>
         </nav>
 
