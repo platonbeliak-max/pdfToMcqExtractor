@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { MCQQuestion } from "@/types/question";
 import { X, Check, Save, AlertCircle } from "lucide-react";
+import { useT } from "@/lib/i18n";
 
 interface QuestionEditorProps {
   question: MCQQuestion;
@@ -17,6 +18,7 @@ export function QuestionEditor({
   onSave,
   onClose,
 }: QuestionEditorProps) {
+  const { t } = useT();
   const [questionText, setQuestionText] = useState(question.question);
   const [options, setOptions] = useState<Record<string, string>>({
     A: question.options["A"] || "",
@@ -94,7 +96,7 @@ export function QuestionEditor({
               Q{question.number}
             </span>
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Edit MCQ Question
+              {t("edTitle")}
             </h3>
           </div>
           <button
@@ -110,7 +112,7 @@ export function QuestionEditor({
           {/* Question Text */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider">
-              Question Statement
+              {t("edQuestion")}
             </label>
             <textarea
               rows={3}
@@ -118,7 +120,7 @@ export function QuestionEditor({
               onChange={(e) => setQuestionText(e.target.value)}
               required
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-              placeholder="Enter question text..."
+              placeholder={t("edQuestionPh")}
             />
           </div>
 
@@ -126,7 +128,7 @@ export function QuestionEditor({
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-                Options
+                {t("edOptions")}
               </label>
               {!options["E"] ? (
                 <button
@@ -134,7 +136,7 @@ export function QuestionEditor({
                   onClick={handleAddOptionE}
                   className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
                 >
-                  + Add Option E
+                  {t("edAddE")}
                 </button>
               ) : (
                 <button
@@ -142,7 +144,7 @@ export function QuestionEditor({
                   onClick={handleRemoveOptionE}
                   className="text-xs font-medium text-rose-600 dark:text-rose-400 hover:underline"
                 >
-                  - Remove Option E
+                  {t("edRemoveE")}
                 </button>
               )}
             </div>
@@ -157,7 +159,7 @@ export function QuestionEditor({
                       onClick={() =>
                         setCorrectAnswer(isSelectedAnswer ? null : key)
                       }
-                      title={`Mark ${key} as Correct Answer`}
+                      title={t("edMark", { k: key })}
                       className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 transition-colors ${
                         isSelectedAnswer
                           ? "bg-emerald-600 text-white shadow-xs"
@@ -170,7 +172,7 @@ export function QuestionEditor({
                       type="text"
                       value={options[key]}
                       onChange={(e) => handleOptionChange(key, e.target.value)}
-                      placeholder={`Option ${key} text...`}
+                      placeholder={t("edOptionPh", { k: key })}
                       className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-all focus:outline-none focus:ring-2 ${
                         isSelectedAnswer
                           ? "border-emerald-500/60 bg-emerald-50/20 dark:bg-emerald-950/20 text-slate-900 dark:text-slate-100 focus:ring-emerald-500"
@@ -182,24 +184,24 @@ export function QuestionEditor({
               })}
             </div>
             <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">
-              💡 Tip: Click on any option letter button (A, B, C, D) to set it as the correct answer.
+              {t("edTip")}
             </p>
           </div>
 
           {/* Correct Answer Selection Dropdown */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider">
-              Correct Answer Key
+              {t("edCorrectKey")}
             </label>
             <select
               value={correctAnswer || ""}
               onChange={(e) => setCorrectAnswer(e.target.value || null)}
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">-- No Answer Selected (Needs Review) --</option>
+              <option value="">{t("edNoAnswer")}</option>
               {Object.keys(options).map((key) => (
                 <option key={key} value={key}>
-                  Option {key} {options[key] ? `: ${options[key].slice(0, 30)}` : ""}
+                  {t("edOption")} {key} {options[key] ? `: ${options[key].slice(0, 30)}` : ""}
                 </option>
               ))}
             </select>
@@ -212,14 +214,14 @@ export function QuestionEditor({
               onClick={onClose}
               className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm font-medium transition-colors"
             >
-              Cancel
+              {t("edCancel")}
             </button>
             <button
               type="submit"
               className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-xs transition-colors"
             >
               <Save className="w-4 h-4" />
-              Save Changes
+              {t("edSave")}
             </button>
           </div>
         </form>
