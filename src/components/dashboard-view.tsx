@@ -29,7 +29,9 @@ interface DashboardViewProps {
   onStartTest: (mode: TestMode) => void;
 }
 
+// Same rule the test builder uses, so "Answered" here equals what can actually go into a test.
 function hasAnswer(q: StructuredQuestion) {
+  if (q.tags?.includes("unreadable") && !q.isEdited) return false;
   if (q.options.length) return answerKeys(q.answer?.key).some((k) => q.options.some((o) => o.key === k));
   return !!(q.answer?.text || "").trim();
 }

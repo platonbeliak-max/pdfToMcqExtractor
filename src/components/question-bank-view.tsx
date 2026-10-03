@@ -421,7 +421,7 @@ export function QuestionBankView({
                         >
                           {opt.key}
                         </span>
-                        <span className="flex-1 truncate">{opt.text}</span>
+                        <span className="flex-1 min-w-0 break-words">{opt.text}</span>
                       </div>
                     );
                   })}

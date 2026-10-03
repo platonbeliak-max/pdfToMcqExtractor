@@ -65,6 +65,73 @@ export function isUnreadableStem(stem: string): boolean {
   return avg < 2.6;
 }
 
+// The Moodle info box can be glued to the answer without a space ("венознаяБаллов: 0,00 из 1,00").
+const GLUED_SCORE_RE = /\s*(?:[бБ6][аaАA][лЛ][лЛ](?:[оo]в|ы)?|Marks?|Points?)\s*[:;.]?\s*-?\d+(?:[.,]\d+)?(?:\s*(?:из|out\s+of|of|\/)\s*-?\d+(?:[.,]\d+)?)?.*$/;
+const TRAILING_ANSWER_LABEL_RE = /\s*(?:Ответ|Answer)\s*:?\s*$/i;
+// Single letters that are real Russian words; any other lone letter means the word was letter-spaced.
+const ONE_LETTER_WORDS = new Set(["в", "к", "с", "у", "о", "и", "а", "я"]);
+
+/** Rejoins letter-spaced OCR words ("ви с ц ера льн а я" → "висцеральная") without touching normal text. */
+function rejoinSpacedLetters(text: string): string {
+  const tokens = text.split(" ");
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    let j = i;
+    while (j < tokens.length && /^[а-яё]{1,3}$/.test(tokens[j])) j++;
+    const run = tokens.slice(i, j);
+    const spaced = run.length >= 2 && run.some((t) => t.length === 1 && !ONE_LETTER_WORDS.has(t));
+    if (!spaced) {
+      out.push(tokens[i]);
+      i++;
+      continue;
+    }
+    let word = run.join("");
+    if (run.length === 2 && j < tokens.length && /^[а-яё]+[,.;]?$/.test(tokens[j])) word += tokens[j++];
+    out.push(word);
+    i = j;
+  }
+  return out.join(" ");
+}
+
+function cleanAnswer(text: string | undefined): string | undefined {
+  if (!text) return text;
+  const cleaned = rejoinSpacedLetters(stripScoreNoise(text.replace(GLUED_SCORE_RE, "")));
+  return cleaned || undefined;
+}
+
+function cleanStem(text: string): string {
+  return stripScoreNoise(text).replace(TRAILING_ANSWER_LABEL_RE, "").trim();
+}
+
+const wordsOf = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+
+/** True when `longer` is `shorter` with a few words typed into its blanks (same words, same order). */
+function isFilledCopy(shorter: string[], longer: string[]): boolean {
+  if (shorter.length < 3 || longer.length <= shorter.length || longer.length - shorter.length > 6) return false;
+  let k = 0;
+  for (const w of longer) if (k < shorter.length && w === shorter[k]) k++;
+  return k === shorter.length;
+}
+
+/**
+ * Later review pages repeat fill-in questions with the student's text already in the blank
+ * ("Сонным бугорком называется передний бугорок поперечного отростка С6."). Those copies have
+ * no answer of their own and only duplicate the original blank question, so they are dropped.
+ */
+function dropFilledCopies(questions: MCQQuestion[]): MCQQuestion[] {
+  const textOnly = questions.filter((q) => Object.keys(q.options).length === 0);
+  const tokens = new Map(textOnly.map((q) => [q.id, wordsOf(q.question)]));
+  const drop = new Set<string>();
+  for (const q of textOnly) {
+    if (q.status !== "missing_answer") continue;
+    const long = tokens.get(q.id)!;
+    const original = textOnly.find((o) => o.id !== q.id && !drop.has(o.id) && isFilledCopy(tokens.get(o.id)!, long));
+    if (original) drop.add(q.id);
+  }
+  return questions.filter((q) => !drop.has(q.id)).map((q, i) => ({ ...q, number: i + 1 }));
+}
+
 function confidenceLevel(c: number): ConfidenceLevel {
   if (c >= 0.85) return "high";
   if (c >= 0.6) return "medium";
@@ -86,7 +153,7 @@ function canonicalToMcq(c: CanonicalQuestionDraft, index: number, byId: Map<stri
     .sort();
 
   let textual: string | undefined;
-  if (c.textAnswer) textual = c.textAnswer;
+  if (c.textAnswer) textual = cleanAnswer(c.textAnswer);
   else if (c.matching) {
     textual = Object.entries(c.matching)
       .map(([k, v]) => `${options[keyByCanonicalKey.get(k) ?? ""] ?? k} → ${v}`)
@@ -101,7 +168,7 @@ function canonicalToMcq(c: CanonicalQuestionDraft, index: number, byId: Map<stri
   const conflict = c.conflicts.length > 0;
   const level = confidenceLevel(c.confidence);
   const first = byId.get(c.instanceIds[0]);
-  const stem = stripScoreNoise(c.stem);
+  const stem = cleanStem(c.stem);
   const unreadable = isUnreadableStem(stem) || isOcrGarbage(stem);
 
   return {
@@ -129,10 +196,11 @@ export function buildQuestions(all: QuestionInstance[]): { questions: MCQQuestio
     .slice()
     .sort((a, b) => (byId.get(a.instanceIds[0])?.sequence ?? 0) - (byId.get(b.instanceIds[0])?.sequence ?? 0));
   // Noise without an answer (screenshots, picture labels) is not a question; noise that carries an answer stays flagged.
-  const questions = ordered
-    .map((c, i) => canonicalToMcq(c, i, byId))
-    .filter((q) => !(q.tags?.includes("unreadable") && q.status === "missing_answer"))
-    .map((q, i) => ({ ...q, number: i + 1 }));
+  const questions = dropFilledCopies(
+    ordered
+      .map((c, i) => canonicalToMcq(c, i, byId))
+      .filter((q) => !(q.tags?.includes("unreadable") && q.status === "missing_answer")),
+  );
   return { questions, totalFound: instances.length };
 }
 
