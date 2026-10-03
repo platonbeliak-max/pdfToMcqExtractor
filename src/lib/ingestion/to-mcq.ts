@@ -11,6 +11,24 @@ export function stripScoreNoise(text: string): string {
   return text.replace(SCORE_RE, " ").replace(/\s{2,}/g, " ").trim();
 }
 
+/**
+ * Picture captions and label lists ("1. 2. нервы 3. нерв…") end up as stems
+ * that make no sense without the image. They stay in the bank but are flagged
+ * and kept out of tests.
+ */
+export function isUnreadableStem(stem: string): boolean {
+  const letters = (stem.match(/\p{L}/gu) ?? []).length;
+  if (letters < 8) return true;
+  const words = stem.match(/\p{L}{2,}/gu) ?? [];
+  if (words.length < 2) return true;
+  const enumMarks = (stem.match(/(?:^|\s)\d{1,2}[.)](?=\s|$)/g) ?? []).length;
+  if (enumMarks >= 2 && enumMarks * 2 >= words.length) return true;
+  const nonSpace = stem.replace(/\s/g, "").length;
+  if (nonSpace && letters / nonSpace < 0.45) return true;
+  const avg = words.reduce((s, w) => s + w.length, 0) / words.length;
+  return avg < 2.6;
+}
+
 function confidenceLevel(c: number): ConfidenceLevel {
   if (c >= 0.85) return "high";
   if (c >= 0.6) return "medium";
@@ -47,16 +65,19 @@ function canonicalToMcq(c: CanonicalQuestionDraft, index: number, byId: Map<stri
   const conflict = c.conflicts.length > 0;
   const level = confidenceLevel(c.confidence);
   const first = byId.get(c.instanceIds[0]);
+  const stem = stripScoreNoise(c.stem);
+  const unreadable = isUnreadableStem(stem);
 
   return {
     id: c.key,
     number: index + 1,
-    question: stripScoreNoise(c.stem),
+    question: stem,
     options,
     correctAnswer,
     answerText,
-    confidence: !hasAnswer || conflict ? "needs-review" : level,
-    status: !hasAnswer ? "missing_answer" : conflict || level === "needs-review" ? "needs_review" : "answered",
+    confidence: !hasAnswer || conflict || unreadable ? "needs-review" : level,
+    status: !hasAnswer ? "missing_answer" : conflict || unreadable || level === "needs-review" ? "needs_review" : "answered",
+    tags: unreadable ? ["unreadable"] : undefined,
     pageNumber: first?.physicalPage,
     explanation: first?.feedback ?? undefined,
     attempts: c.instanceIds.length,

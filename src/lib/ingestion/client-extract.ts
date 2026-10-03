@@ -196,20 +196,38 @@ async function readTextLayer(page: PdfPage, height: number): Promise<RawTextItem
   const content = await page.getTextContent();
   const styles = content.styles as Record<string, { fontFamily?: string }>;
   const items: RawTextItem[] = [];
+  // Letter-spaced fonts arrive as one item per glyph ("Тес","т"," ","н","а"…).
+  // Glyphs that touch on the same baseline belong to one word; explicit space
+  // items mark the real word boundaries, so they block merging.
+  let last: { item: RawTextItem; end: number; base: number } | null = null;
+  let afterSpace = false;
   for (const raw of content.items) {
     if (!("str" in raw)) continue;
     const it = raw as { str: string; transform: number[]; width: number; height: number; fontName?: string };
     if (!it.str) continue;
+    if (!it.str.trim()) {
+      afterSpace = true;
+      continue;
+    }
     const [, , c, d, e, f] = it.transform;
     const fontH = it.height || Math.hypot(c, d) || 10;
-    items.push({
+    if (last && !afterSpace && Math.abs(last.base - f) < 0.5 && Math.abs(e - last.end) <= Math.max(0.6, fontH * 0.12)) {
+      last.item.str += it.str;
+      last.item.w = e + it.width - last.item.x;
+      last.end = e + it.width;
+      continue;
+    }
+    afterSpace = false;
+    const item: RawTextItem = {
       str: it.str,
       x: e,
       y: height - f - fontH,
       w: it.width,
       h: fontH,
       font: it.fontName ? `${it.fontName}${styles[it.fontName]?.fontFamily ? `|${styles[it.fontName].fontFamily}` : ""}` : undefined,
-    });
+    };
+    last = { item, end: e + it.width, base: f };
+    items.push(item);
   }
   return items;
 }

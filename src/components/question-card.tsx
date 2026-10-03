@@ -132,6 +132,11 @@ export function QuestionCard({
               {t("needAnswer")}
             </span>
           )}
+          {question.tags?.includes("unreadable") && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 font-bold">
+              {t("unreadable")}
+            </span>
+          )}
           {question.isEdited && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300 font-medium">
               Edited

@@ -36,7 +36,7 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
     seen.add(key);
     const correct = answerKeys(q.answer?.key).filter((k) => q.options.some((o) => o.key === k));
     const textAnswer = !q.options.length ? (q.answer?.text || "").trim() : "";
-    if (!correct.length && !textAnswer) {
+    if ((!correct.length && !textAnswer) || (q.tags?.includes("unreadable") && !q.isEdited)) {
       skipped++;
       continue;
     }
@@ -51,7 +51,32 @@ function isRight(item: TestItem, a: Answer | undefined): boolean {
     const p = [...a.picked].sort().join(",");
     return p === [...item.correct].sort().join(",");
   }
-  return norm(a.typed) === norm(item.textAnswer);
+  return textMatches(a.typed, item.textAnswer);
+}
+
+function editDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+}
+
+/** Accepts ё/е, Latin look-alikes, numeric "0,5"="0.5" and small typos (~1 per 6 letters). */
+function textMatches(typed: string, expected: string): boolean {
+  const canon = (s: string) => norm(s.replace(/ё/gi, "е").replace(/(\d),(\d)/g, "$1.$2")).replace(/\s/g, "");
+  const a = canon(typed);
+  const b = canon(expected);
+  if (!a) return false;
+  if (a === b) return true;
+  if (/^[\d.]+$/.test(b)) return Number(a) === Number(b);
+  return editDistance(a, b) <= Math.floor(b.length / 6);
 }
 
 export function TestView({ questions, onGoUpload }: { questions: StructuredQuestion[]; onGoUpload: () => void }) {
