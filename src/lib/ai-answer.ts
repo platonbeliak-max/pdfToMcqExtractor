@@ -10,17 +10,39 @@ interface AiAnswerResponse {
 
 export class AiBillingError extends Error {
   constructor() {
-    super("AI Gateway billing not set up");
+    super("AI provider key is missing");
+  }
+}
+
+export class AiRateLimitError extends Error {
+  constructor() {
+    super("AI provider rate limit reached");
+  }
+}
+
+const RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_WAIT_MS = 10_000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function requestAnswer(q: StructuredQuestion): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch("/api/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q.question.text, options: q.options }),
+    });
+    if (res.status !== 429) return res;
+    if (attempt >= RATE_LIMIT_RETRIES) throw new AiRateLimitError();
+    await sleep(RATE_LIMIT_WAIT_MS * (attempt + 1));
   }
 }
 
 export async function lookupAiAnswer(q: StructuredQuestion): Promise<StructuredQuestion> {
-  const res = await fetch("/api/answer", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question: q.question.text, options: q.options }),
-  });
-  if (res.status === 402) throw new AiBillingError();
+  const res = await requestAnswer(q);
+  if (res.status === 500 && (await res.clone().json().catch(() => null))?.error === "missing_key") {
+    throw new AiBillingError();
+  }
   if (!res.ok) throw new Error(`lookup failed (${res.status})`);
   const data = (await res.json()) as AiAnswerResponse;
 
@@ -47,19 +69,19 @@ export async function lookupMany(
   targets: StructuredQuestion[],
   onResult: (q: StructuredQuestion) => void,
   onProgress: (done: number, failed: number) => void,
-  concurrency = 3
+  concurrency = 1
 ): Promise<void> {
   let next = 0;
   let done = 0;
   let failed = 0;
-  let billingError: AiBillingError | null = null;
+  let fatalError: AiBillingError | AiRateLimitError | null = null;
   const worker = async () => {
-    while (next < targets.length && !billingError) {
+    while (next < targets.length && !fatalError) {
       const q = targets[next++];
       try {
         onResult(await lookupAiAnswer(q));
       } catch (err) {
-        if (err instanceof AiBillingError) billingError = err;
+        if (err instanceof AiBillingError || err instanceof AiRateLimitError) fatalError = err;
         failed++;
       }
       done++;
@@ -67,5 +89,5 @@ export async function lookupMany(
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
-  if (billingError) throw billingError;
+  if (fatalError) throw fatalError;
 }

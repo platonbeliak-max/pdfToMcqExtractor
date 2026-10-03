@@ -41,7 +41,10 @@ import {
 import { useToast } from "./toast";
 import { useT } from "@/lib/i18n";
 import { hasAnswer } from "@/lib/answerable";
-import { lookupAiAnswer, lookupMany, AiBillingError } from "@/lib/ai-answer";
+import { lookupAiAnswer, lookupMany, AiBillingError, AiRateLimitError } from "@/lib/ai-answer";
+
+const aiErrorKey = (err: unknown) =>
+  err instanceof AiRateLimitError ? "aiRateLimit" : err instanceof AiBillingError ? "aiBilling" : "aiFailBody";
 import { isCorrectKey, answerKeys, isFigureQuestion } from "@/types/question";
 import { SvgEditorModal } from "./svg-editor-modal";
 import { ManualQuestionModal } from "./manual-question-modal";
@@ -191,7 +194,7 @@ export function QuestionBankView({
       applyAiResult(await lookupAiAnswer(q));
       showToast(t("aiFoundTitle"), t("aiFoundBody"), "success");
     } catch (err) {
-      showToast(t("aiFailTitle"), t(err instanceof AiBillingError ? "aiBilling" : "aiFailBody"), "error");
+      showToast(t("aiFailTitle"), t(aiErrorKey(err)), "error");
     } finally {
       setAiBusy((s) => {
         const n = new Set(s);
@@ -213,9 +216,9 @@ export function QuestionBankView({
       );
       showToast(t("aiFoundTitle"), t("aiBulkDone"), "success");
     } catch (err) {
-      showToast(t("aiFailTitle"), t(err instanceof AiBillingError ? "aiBilling" : "aiFailBody"), "error");
-    } finally {
-      setAiProgress(null);
+ showToast(t("aiFailTitle"), t(aiErrorKey(err)), "error");
+  } finally {
+  setAiProgress(null);
     }
   };
 

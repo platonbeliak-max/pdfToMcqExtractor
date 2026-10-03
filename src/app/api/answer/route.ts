@@ -1,7 +1,9 @@
-import { gateway, generateText, isStepCount, Output } from "ai";
 import { z } from "zod";
 
 export const maxDuration = 60;
+
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const MODEL = "openai/gpt-oss-120b";
 
 const requestSchema = z.object({
   question: z.string().trim().min(3).max(2000),
@@ -11,80 +13,121 @@ const requestSchema = z.object({
     .default([]),
 });
 
-const answerSchema = z.object({
-  keys: z
-    .array(z.string())
-    .describe("Option letters that are correct. Empty array if the question has no options."),
-  answerText: z.string().describe("The correct answer in the question's language, short and precise."),
-  explanation: z
-    .string()
-    .describe("1-3 sentences in the question's language explaining why, based on the sources."),
-  confidence: z.enum(["high", "medium", "low"]),
-  sources: z
-    .array(z.object({ title: z.string(), url: z.string() }))
-    .describe("Medical sources actually used, with real URLs from the search results."),
-});
+interface GroqSearchResult {
+  title?: string;
+  url?: string;
+}
 
-const MEDICAL_DOMAINS = [
-  "ncbi.nlm.nih.gov",
-  "pubmed.ncbi.nlm.nih.gov",
-  "medscape.com",
-  "radiopaedia.org",
-  "kenhub.com",
-  "teachmeanatomy.info",
-  "msdmanuals.com",
-  "britannica.com",
-  "wikipedia.org",
-  "rosmedlib.ru",
-  "rmj.ru",
-  "cyberleninka.ru",
-  "bigenc.ru",
-  "medportal.ru",
-  "studfile.net",
-];
+interface GroqResponse {
+  choices?: {
+    message?: {
+      content?: string | null;
+      executed_tools?: { search_results?: { results?: GroqSearchResult[] } }[];
+    };
+  }[];
+}
+
+const SYSTEM_PROMPT =
+  "You are a medical exam assistant (anatomy, physiology, histology, clinical medicine). " +
+  "Search medical sources before answering and base the answer on what they say. " +
+  "Answer in the same language as the question. Never call a tool other than the search tool. " +
+  "Reply in plain text using exactly these four lines and nothing else:\n" +
+  "KEYS: <letters of correct options separated by commas, or - if there are no options>\n" +
+  "ANSWER: <the correct answer, short and precise>\n" +
+  "EXPLANATION: <1-3 sentences explaining why>\n" +
+  "CONFIDENCE: <high|medium|low>";
+
+function stripCitations(text: string): string {
+  return text.replace(/【[^】]*】/g, "").replace(/\s{2,}/g, " ").trim();
+}
+
+function field(text: string, name: string): string {
+  const match = text.match(new RegExp(`^\\s*\\**${name}\\**\\s*:\\s*(.+)$`, "im"));
+  return match ? stripCitations(match[1].replace(/\*\*/g, "")) : "";
+}
 
 export async function POST(req: Request) {
   const parsed = requestSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    return Response.json({ error: "missing_key" }, { status: 500 });
+  }
+
   const { question, options } = parsed.data;
   const optionBlock = options.length
     ? options.map((o) => `${o.key}) ${o.text}`).join("\n")
     : "(no options — open answer: give the exact term)";
 
   try {
-    const { output } = await generateText({
-      model: "openai/gpt-5-mini",
-      tools: {
-        search: gateway.tools.perplexitySearch({
-          maxResults: 6,
-          searchDomainFilter: MEDICAL_DOMAINS.slice(0, 20),
-        }),
-      },
-      stopWhen: isStepCount(5),
-      output: Output.object({ schema: answerSchema }),
-      system:
-        "You are a medical exam assistant (anatomy, physiology, histology, clinical medicine). " +
-        "Always search medical sources before answering. Base the answer on what the sources say, " +
-        "cite only URLs that appeared in search results, and lower confidence when sources disagree or are missing. " +
-        "Answer in the same language as the question.",
-      prompt: `Question:\n${question}\n\nOptions:\n${optionBlock}\n\nIf several options can be correct, return all of them.`,
+    const res = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Question:\n${question}\n\nOptions:\n${optionBlock}\n\nIf several options can be correct, list all of them.`,
+          },
+        ],
+        tools: [{ type: "browser_search" }],
+        tool_choice: "auto",
+      }),
+      signal: AbortSignal.timeout(55_000),
     });
 
+    if (res.status === 429) {
+      return Response.json({ error: "rate_limit" }, { status: 429 });
+    }
+    if (!res.ok) {
+      console.error("[answer] groq error:", res.status, await res.text().catch(() => ""));
+      return Response.json({ error: "Lookup failed" }, { status: 502 });
+    }
+
+    const data = (await res.json()) as GroqResponse;
+    const message = data.choices?.[0]?.message;
+    const content = message?.content ?? "";
+
     const validKeys = new Set(options.map((o) => o.key.toUpperCase()));
-    const keys = output.keys.map((k) => k.trim().toUpperCase()).filter((k) => validKeys.has(k));
+    const keys = Array.from(
+      new Set(
+        field(content, "KEYS")
+          .toUpperCase()
+          .split(/[^A-ZА-Я0-9]+/)
+          .filter((k) => validKeys.has(k)),
+      ),
+    );
+
+    const answerText = field(content, "ANSWER");
+    if (!answerText && keys.length === 0) {
+      return Response.json({ error: "Lookup failed" }, { status: 502 });
+    }
+
+    const confidenceRaw = field(content, "CONFIDENCE").toLowerCase();
+    const confidence = ["high", "medium", "low"].includes(confidenceRaw) ? confidenceRaw : "medium";
+
+    const seen = new Set<string>();
+    const sources = (message?.executed_tools ?? [])
+      .flatMap((t) => t.search_results?.results ?? [])
+      .filter((s): s is { title?: string; url: string } => !!s.url && /^https?:\/\//.test(s.url))
+      .filter((s) => (seen.has(s.url) ? false : (seen.add(s.url), true)))
+      .slice(0, 5)
+      .map((s) => ({ title: s.title || new URL(s.url).hostname, url: s.url }));
+
     return Response.json({
-      ...output,
       keys,
-      sources: output.sources.filter((s) => /^https?:\/\//.test(s.url)).slice(0, 5),
+      answerText,
+      explanation: field(content, "EXPLANATION"),
+      confidence,
+      sources,
     });
   } catch (err) {
     console.error("[answer] lookup failed:", err);
-    const message = err instanceof Error ? err.message : "";
-    if (/credit card|billing|insufficient/i.test(message)) {
-      return Response.json({ error: "gateway_billing" }, { status: 402 });
-    }
     return Response.json({ error: "Lookup failed" }, { status: 502 });
   }
 }
