@@ -38,6 +38,8 @@ import {
   Copy,
 } from "lucide-react";
 import { useToast } from "./toast";
+import { useT } from "@/lib/i18n";
+import { isCorrectKey, answerKeys } from "@/types/question";
 import { SvgEditorModal } from "./svg-editor-modal";
 import { ManualQuestionModal } from "./manual-question-modal";
 import { CsvImportModal } from "./csv-import-modal";
@@ -55,6 +57,7 @@ export function QuestionBankView({
   onViewSource,
 }: QuestionBankViewProps) {
   const { showToast } = useToast();
+  const { t } = useT();
 
   const [filter, setFilter] = useState<QuestionBankFilter>({
     searchQuery: "",
@@ -186,7 +189,7 @@ export function QuestionBankView({
             type="text"
             value={filter.searchQuery || ""}
             onChange={(e) => setFilter({ ...filter, searchQuery: e.target.value, page: 1 })}
-            placeholder="Search questions, options, answers, or tags (e.g. ঢাকা, capital)..."
+            placeholder={t("searchBank")}
             className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -198,21 +201,21 @@ export function QuestionBankView({
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
-            Add Question
+            {t("addQuestion")}
           </button>
           <button
             onClick={() => setIsCsvImportOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold transition-colors"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-            Import CSV
+            {t("importCsv")}
           </button>
           <button
             onClick={handleExportSelectedCsv}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold transition-colors"
           >
             <Download className="w-3.5 h-3.5 text-blue-600" />
-            Export CSV
+            {t("exportCsv")}
           </button>
           <button
             onClick={handleExportSelectedSvgZip}
@@ -229,11 +232,11 @@ export function QuestionBankView({
         {/* Status Filters */}
         <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
           {[
-            { id: "all", label: `All (${questions.length})` },
-            { id: "approved", label: "Approved" },
-            { id: "pending", label: "Pending" },
-            { id: "review", label: "Needs Review" },
-            { id: "duplicate", label: `Duplicates (${duplicateMap.size})` },
+            { id: "all", label: `${t("all")} (${questions.length})` },
+            { id: "approved", label: t("approved") },
+            { id: "pending", label: t("pending") },
+            { id: "review", label: `${t("noAnswer")} (${questions.filter((q) => !q.answer).length})` },
+            { id: "duplicate", label: `${t("duplicates")} (${duplicateMap.size})` },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -278,10 +281,10 @@ export function QuestionBankView({
         <div className="p-12 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
           <HelpCircle className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
           <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">
-            No questions found
+            {t("noQuestions")}
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
-            Try adjusting your search terms or filters, or upload a question PDF to populate your Question Bank.
+            {t("noQuestionsText")}
           </p>
         </div>
       ) : (
@@ -323,19 +326,19 @@ export function QuestionBankView({
                           : "bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-500/20"
                       }`}
                     >
-                      {q.status === "verified" ? "Verified" : q.status === "rejected" ? "Rejected" : "Pending Review"}
+                      {q.status === "verified" ? t("approved") : q.status === "rejected" ? "×" : t("pending")}
                     </span>
 
                     {/* Confidence Score */}
                     <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold">
-                      Confidence: {confPercent}%
+                      {confPercent}%
                     </span>
 
                     {/* Duplicate Warning */}
                     {isDuplicate && (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-500/30">
                         <AlertTriangle className="w-3 h-3" />
-                        Potential Duplicate
+                        Duplicate
                       </span>
                     )}
 
@@ -399,7 +402,7 @@ export function QuestionBankView({
                 {/* Options Grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 mb-2">
                   {q.options.map((opt) => {
-                    const isCorrect = q.answer?.key === opt.key;
+                    const isCorrect = isCorrectKey(q.answer?.key, opt.key);
                     return (
                       <div
                         key={opt.key}
@@ -427,13 +430,15 @@ export function QuestionBankView({
                 {/* Answer Strip */}
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 pt-1.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                   <div>
-                    <span className="font-semibold text-slate-600 dark:text-slate-300">Answer: </span>
+                    <span className="font-semibold text-slate-600 dark:text-slate-300">{t("answer")}: </span>
                     {q.answer ? (
                       <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                        {q.answer.key}. {q.answer.text}
+                        {answerKeys(q.answer.key).join(", ")}
+                        {q.answer.key && q.answer.text ? ". " : ""}
+                        {q.answer.text}
                       </span>
                     ) : (
-                      <span className="italic text-rose-500">Not detected (Needs Review)</span>
+                      <span className="italic font-semibold text-rose-500">{t("notDetected")}</span>
                     )}
                   </div>
                   {q.category && (

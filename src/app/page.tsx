@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { Navbar, PlatformTab } from "@/components/navbar";
+import { LandingHero } from "@/components/landing-hero";
 import { PdfUploader } from "@/components/pdf-uploader";
 import { ExtractionProgressView } from "@/components/extraction-progress";
 import { StatsCard } from "@/components/stats-card";
@@ -180,7 +181,7 @@ export default function Home() {
             percent: Math.min(85, Math.round(25 + (curr / total) * 60)),
           });
         },
-        { forceOcr: options.useOcr === "force", lang: "ben+eng" }
+        { forceOcr: options.useOcr === "force", lang: "rus+eng" }
       );
 
       if (!clientRes.success) {
@@ -471,79 +472,13 @@ export default function Home() {
             {/* Step 1: Upload Dropzone if no active extraction */}
             {!isProcessing && currentQuestions.length === 0 && (
               <div className="py-6 sm:py-12 space-y-12">
-                <div className="text-center max-w-3xl mx-auto space-y-3">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-semibold border border-blue-500/20">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Production PDF Question Bank Platform</span>
-                  </div>
-                  <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-slate-900 dark:text-white">
-                    Extract Pure Questions from{" "}
-                    <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                      Any Exam PDF
-                    </span>
-                  </h1>
-                  <p className="text-base text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                    Detects strictly questions, options, and answers while ignoring all headers,
-                    footers, instructions, and book metadata. Native English and Bengali (বাংলা) support.
-                  </p>
-                </div>
+                <LandingHero />
 
                 <PdfUploader
                   onFileSelect={(file, opts) => handleStartExtraction(file, file.name, opts)}
-                  onSampleSelect={(blob, name, opts) => handleStartExtraction(blob, name, opts)}
                   isLoading={isProcessing}
                 />
 
-                {/* Highlights */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto pt-6 border-t border-slate-200/80 dark:border-slate-800/80">
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 mb-2">
-                      <CheckCircle className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Noise Filtering
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Ignores chapter titles, negative marking notes, page numbers, and disclaimers.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 mb-2">
-                      <BookOpen className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Bengali &amp; English
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Full support for ১, ২, ৩, ক, খ, গ, ঘ and standard A, B, C, D numbering.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 mb-2">
-                      <Cpu className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Text &amp; OCR Engine
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Extracts directly in browser up to 150MB with zero server upload limits.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 mb-2">
-                      <Layers className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      SVG &amp; CSV Exports
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Download individual/bulk vector SVGs and standard CSVs with UTF-8 BOM.
-                    </p>
-                  </div>
-                </div>
               </div>
             )}
 
