@@ -50,6 +50,7 @@ import { SvgEditorModal } from "./svg-editor-modal";
 import { ManualQuestionModal } from "./manual-question-modal";
 import { CsvImportModal } from "./csv-import-modal";
 import { QuestionEditor } from "./question-editor";
+import { FigureImage } from "./figure-image";
 
 interface QuestionBankViewProps {
   questions: StructuredQuestion[];
@@ -507,6 +508,8 @@ export function QuestionBankView({
                 <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-2 leading-relaxed">
                   {q.question.text}
                 </h4>
+
+                {q.imageId && <FigureImage imageId={q.imageId} className="mb-3 max-w-xl" />}
 
                 {/* Options Grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 mb-2">
