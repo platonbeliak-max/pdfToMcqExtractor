@@ -283,6 +283,7 @@ export interface QuestionInstance {
   id: string;
   /** Text typed into an LMS answer field (short-answer questions). */
   studentResponse?: string | null;
+  inlineCorrectAnswer?: string | null;
   documentId: string;
   attemptId: string;
   /** Physical PDF page where the block starts (1-based). */

@@ -14,6 +14,7 @@ import {
 import { downloadBulkSvgZip } from "./svg/svg-generator";
 import { stripScoreNoise } from "./ingestion/noise";
 import { clearImages, deleteImages } from "./figure-store";
+import { hasAnswer } from "./answerable";
 
 const STORAGE_QUESTIONS_KEY = "mcq_platform_questions_v2";
 const STORAGE_DOCS_KEY = "mcq_platform_documents_v2";
@@ -210,7 +211,7 @@ export function queryQuestionBank(
     } else if (filter.status === "approved") {
       filtered = filtered.filter((item) => item.status === "verified");
     } else if (filter.status === "review") {
-      filtered = filtered.filter((item) => !item.answer);
+      filtered = filtered.filter((item) => !hasAnswer(item));
     } else {
       filtered = filtered.filter((item) => item.status === filter.status);
     }

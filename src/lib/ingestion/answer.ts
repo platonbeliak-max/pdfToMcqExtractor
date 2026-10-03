@@ -171,6 +171,16 @@ export function determineAnswer(q: QuestionInstance): QuestionInstance {
     }
   }
 
+  const inline = q.options.length === 0 ? q.inlineCorrectAnswer?.trim() : null;
+  if (inline && !textAnswer && status === "UNRESOLVED") {
+    ev({ type: "STUDENT_RESPONSE", source: "DOCUMENT", optionId: null, polarity: null, confidence: 0.88, page: q.physicalPage, bbox: null, rawValue: inline });
+    textAnswer = inline;
+    complete = true;
+    status = "CONFIRMED_BY_DOCUMENT";
+    confidence = 0.88;
+    reasons.push("Правильный ответ указан после вопроса");
+  }
+
   // 2b. Typed response in an answer field, graded by the score.
   const response = q.options.length === 0 ? q.studentResponse?.trim() : null;
   if (response && !textAnswer && status === "UNRESOLVED") {

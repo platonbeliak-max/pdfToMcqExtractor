@@ -1,7 +1,8 @@
 "use client";
 
 import React from "react";
-import { StructuredQuestion, DocumentRecord, answerKeys, isFigureQuestion } from "@/types/question";
+import { StructuredQuestion, DocumentRecord, isFigureQuestion } from "@/types/question";
+import { answerStats } from "@/lib/answerable";
 import { exportToStandardCSV, downloadCsvFile } from "@/lib/csv-manager";
 import { useT, type TKey } from "@/lib/i18n";
 import {
@@ -29,13 +30,6 @@ interface DashboardViewProps {
   onStartTest: (mode: TestMode) => void;
 }
 
-// Same rule the test builder uses, so "Answered" here equals what can actually go into a test.
-function hasAnswer(q: StructuredQuestion) {
-  if (q.tags?.includes("unreadable") && !q.isEdited) return false;
-  if (q.options.length) return answerKeys(q.answer?.key).some((k) => q.options.some((o) => o.key === k));
-  return !!(q.answer?.text || "").trim();
-}
-
 export function DashboardView({
   questions,
   documents,
@@ -46,7 +40,7 @@ export function DashboardView({
 }: DashboardViewProps) {
   const { showToast } = useToast();
   const { t } = useT();
-  const answered = questions.filter(hasAnswer).length;
+  const { unique, answered, missing } = answerStats(questions);
   const figures = questions.filter(isFigureQuestion).length;
 
   const handleExportCsv = () => {
@@ -60,9 +54,9 @@ export function DashboardView({
 
   const stats: { label: TKey; sub: TKey; value: number; icon: React.ElementType; tone: string }[] = [
     { label: "dPdfs", sub: "dPdfsSub", value: documents.length, icon: FileText, tone: "text-slate-900 dark:text-slate-100" },
-    { label: "dTotal", sub: "dTotalSub", value: questions.length, icon: HelpCircle, tone: "text-slate-900 dark:text-slate-100" },
+    { label: "dTotal", sub: "dTotalSub", value: unique, icon: HelpCircle, tone: "text-slate-900 dark:text-slate-100" },
     { label: "dAnswered", sub: "dAnsweredSub", value: answered, icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400" },
-    { label: "dMissing", sub: "dMissingSub", value: questions.length - answered, icon: AlertTriangle, tone: "text-amber-600 dark:text-amber-400" },
+    { label: "dMissing", sub: "dMissingSub", value: missing, icon: AlertTriangle, tone: "text-amber-600 dark:text-amber-400" },
   ];
 
   return (

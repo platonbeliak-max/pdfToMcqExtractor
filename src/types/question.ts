@@ -53,6 +53,9 @@ export interface StructuredQuestion {
   updatedAt: string;
   isEdited?: boolean;
   imageId?: string;
+  answerOrigin?: "file" | "ai";
+  aiSources?: { title: string; url: string }[];
+  aiConfidence?: "high" | "medium" | "low";
   originalQuestion?: {
     text: string;
     options: QuestionOptionItem[];

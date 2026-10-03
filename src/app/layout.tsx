@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { ToastProvider } from "@/components/toast";
 import { LangProvider } from "@/lib/i18n";
+import { HintLayer } from "@/components/hint-layer";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -57,6 +58,7 @@ export default function RootLayout({
         />
         <LangProvider>
           <ToastProvider>{children}</ToastProvider>
+          <HintLayer />
         </LangProvider>
       </body>
     </html>

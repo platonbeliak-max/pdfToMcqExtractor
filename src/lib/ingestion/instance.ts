@@ -280,7 +280,17 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
   const stemRaw = stemParts.join(" ").replace(/⟫\s*⟪/g, " ");
   const responses = [...stemRaw.matchAll(/⟪([^⟫]*)⟫/g)].map((m) => cleanDisplayText(m[1])).filter(Boolean);
   const studentResponse = responses.length ? responses.join(" ") : null;
-  const stem = stripLmsChrome(cleanDisplayText(stripMarkGlyphs(stemRaw.replace(/⟪[^⟫]*⟫/g, " ").replace(/[⟪⟫]/g, "")).text));
+  let stem = stripLmsChrome(cleanDisplayText(stripMarkGlyphs(stemRaw.replace(/⟪[^⟫]*⟫/g, " ").replace(/[⟪⟫]/g, "")).text));
+  // Moodle prints the expected answer of a fill-in question right after the
+  // prompt with no label: "…проток (одно слово).вартонов".
+  let inlineCorrectAnswer: string | null = null;
+  if (studentResponse) {
+    const tail = stem.match(/^(.*[.)?:])\s*([\p{L}][\p{L}\p{N}\- ]{0,38}[\p{L}\p{N}])\s*$/u);
+    if (tail && tail[1].length >= 15 && tail[2].split(/\s+/).length <= 4) {
+      stem = tail[1].trim();
+      inlineCorrectAnswer = tail[2].trim();
+    }
+  }
 
   // Tables: ≥2 consecutive lines with the same (≥2) cell count.
   const tables: TableAsset[] = [];
@@ -390,6 +400,7 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
     rawText: lines.map((l) => l.text).join("\n").replace(/[⟪⟫]/g, ""),
     stem,
     studentResponse,
+    inlineCorrectAnswer,
     normalizedStem: normalizeForMatch(stem),
     instruction,
     questionType: type.type,

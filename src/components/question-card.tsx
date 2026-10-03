@@ -152,6 +152,7 @@ export function QuestionCard({
 
         <div className="flex items-center gap-1.5">
           <span
+            title={t("hConf")}
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${confidenceConfig.className}`}
           >
             <ConfIcon className="w-3 h-3" />
@@ -225,7 +226,7 @@ export function QuestionCard({
           <button
             type="button"
             onClick={copyQuestionTextOnly}
-            title="Copy question text only"
+            title={t("hCopyQ")}
             className="px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium transition-colors"
           >
             {t("copyQ")}
@@ -233,7 +234,7 @@ export function QuestionCard({
           <button
             type="button"
             onClick={copyOptionsOnly}
-            title="Copy options only"
+            title={t("hCopyOpt")}
             className="px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium transition-colors"
           >
             {t("copyOpt")}
@@ -241,7 +242,7 @@ export function QuestionCard({
           <button
             type="button"
             onClick={copyAnswerOnly}
-            title="Copy correct answer only"
+            title={t("hCopyAns")}
             className="px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium transition-colors"
           >
             {t("copyAns")}
@@ -249,7 +250,7 @@ export function QuestionCard({
           <button
             type="button"
             onClick={copyFullMCQ}
-            title="Copy full MCQ (Question + Options + Answer)"
+            title={t("hCopyFull")}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 text-[11px] font-semibold transition-colors"
           >
             <Copy className="w-3 h-3" />
@@ -257,14 +258,14 @@ export function QuestionCard({
           </button>
 
           {/* SVG Studio */}
-          {onOpenSvg && (
+          {onOpenSvg && isFigureQuestion(question) && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenSvg(question);
               }}
-              title="Open in SVG Studio"
+              title={t("hSvg")}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 text-[11px] font-bold transition-colors ml-1"
             >
               <Sparkles className="w-3 h-3 text-amber-500" />
@@ -279,7 +280,7 @@ export function QuestionCard({
               e.stopPropagation();
               onEdit(question);
             }}
-            title="Edit question"
+            title={t("hEdit")}
             className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-lg transition-colors ml-1"
           >
             <Edit2 className="w-3.5 h-3.5" />
@@ -294,7 +295,7 @@ export function QuestionCard({
                 onDelete(question.id);
               }
             }}
-            title="Delete question"
+            title={t("hDelete")}
             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />

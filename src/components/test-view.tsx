@@ -3,8 +3,9 @@
 import React, { useMemo, useState } from "react";
 import { StructuredQuestion, answerKeys, isFigureQuestion } from "@/types/question";
 import { useT } from "@/lib/i18n";
-import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList } from "lucide-react";
+import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye } from "lucide-react";
 import { FigureImage } from "./figure-image";
+import { dedupeKey, hasAnswer } from "@/lib/answerable";
 
 interface TestItem {
   id: string;
@@ -36,12 +37,12 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
   const pool: TestItem[] = [];
   let skipped = 0;
   for (const q of questions) {
-    const key = norm(q.question.text) + "|" + q.options.map((o) => norm(o.text)).sort().join("|");
+    const key = dedupeKey(q);
     if (seen.has(key)) continue;
     seen.add(key);
     const correct = answerKeys(q.answer?.key).filter((k) => q.options.some((o) => o.key === k));
     const textAnswer = !q.options.length ? (q.answer?.text || "").trim() : "";
-    if ((!correct.length && !textAnswer) || (q.tags?.includes("unreadable") && !q.isEdited)) {
+    if (!hasAnswer(q)) {
       skipped++;
       continue;
     }
@@ -122,6 +123,7 @@ export function TestView({
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [checked, setChecked] = useState(false);
   const [finished, setFinished] = useState(false);
+  const [revealed, setRevealed] = useState<Record<string, true>>({});
 
   const start = (source: TestItem[]) => {
     const n = count === 0 ? source.length : Math.min(count, source.length);
@@ -134,6 +136,7 @@ export function TestView({
     setItems(chosen);
     setIdx(0);
     setAnswers({});
+    setRevealed({});
     setChecked(false);
     setFinished(false);
   };
@@ -236,7 +239,7 @@ export function TestView({
   }
 
   if (finished) {
-    const wrong = items.filter((it) => !isRight(it, answers[it.id]));
+    const wrong = items.filter((it) => revealed[it.id] || !isRight(it, answers[it.id]));
     const score = items.length - wrong.length;
     const pct = Math.round((score / items.length) * 100);
     return (
@@ -283,7 +286,12 @@ export function TestView({
   const item = items[idx];
   const ans = answers[item.id] ?? { picked: [], typed: "" };
   const multi = !item.figure && item.correct.length > 1;
-  const right = checked && isRight(item, ans);
+  const wasRevealed = !!revealed[item.id];
+  const right = checked && !wasRevealed && isRight(item, ans);
+  const reveal = () => {
+    setRevealed({ ...revealed, [item.id]: true });
+    setChecked(true);
+  };
   const canCheck = item.figure
     ? item.options.every((o) => ans.labels?.[o.key])
     : item.correct.length
@@ -412,7 +420,7 @@ export function TestView({
               className="px-4 py-3 rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-transparent text-slate-900 dark:text-slate-100 focus:border-blue-600 outline-none"
             />
             {checked && !right && (
-              <p className="text-sm text-emerald-700 dark:text-emerald-400">
+              <p className="text-sm text-emerald-700 dark:text-emerald-400 leading-relaxed">
                 {t("correctAnswer")}: {item.textAnswer}
               </p>
             )}
@@ -420,9 +428,20 @@ export function TestView({
         )}
 
         <div className="flex items-center justify-between gap-3 pt-1">
-          <span aria-live="polite" className={`text-sm font-bold ${right ? "text-emerald-600" : "text-red-600"}`}>
-            {checked ? (right ? t("testRight") : t("testWrong")) : ""}
+          <span aria-live="polite" className={`text-sm font-bold ${right ? "text-emerald-600" : wasRevealed ? "text-amber-600" : "text-red-600"}`}>
+            {checked ? (wasRevealed ? t("testRevealed") : right ? t("testRight") : t("testWrong")) : ""}
           </span>
+          {!checked && (
+            <button
+              type="button"
+              onClick={reveal}
+              title={t("hReveal")}
+              className="ml-auto inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-400 font-bold text-sm"
+            >
+              <Eye className="w-4 h-4" />
+              {t("testShowAnswer")}
+            </button>
+          )}
           {checked ? (
             <button type="button" onClick={next} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm">
               {idx + 1 >= items.length ? t("testFinish") : t("testNext")}
@@ -433,6 +452,7 @@ export function TestView({
               type="button"
               disabled={!canCheck}
               onClick={() => setChecked(true)}
+              title={t("hCheck")}
               className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm"
             >
               {t("testCheck")}
