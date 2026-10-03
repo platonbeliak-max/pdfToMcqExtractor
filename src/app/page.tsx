@@ -23,7 +23,7 @@ import {
   toStructuredQuestion,
   toMCQQuestion,
 } from "@/types/question";
-import { extractTextFromPDFClient } from "@/lib/client-pdf-parser";
+import { extractTextFromPDFClient, type ClientExtractionResult } from "@/lib/client-pdf-parser";
 import { parseMCQDocument } from "@/lib/question-parser";
 import {
   loadSavedQuestions,
@@ -163,7 +163,15 @@ export default function Home() {
         const { extractWithEngine } = await import("@/lib/ingestion/to-mcq");
         return extractWithEngine(engineBytes, { ocr: options.useOcr === "force" ? "force" : "auto" });
       };
-      const clientRes = await extractTextFromPDFClient(
+      // The universal engine is the primary extractor; the legacy parser only runs when it finds nothing.
+      const engineFirst = await runEngine().catch((e) => {
+        console.warn("Engine extraction failed, falling back to legacy parser:", e);
+        return null;
+      });
+      if (engineFirst && engineFirst.questions.length > 0) extractedQuestions = engineFirst.questions;
+      const clientRes: ClientExtractionResult = extractedQuestions.length > 0 && !options.useAi
+        ? { success: true, totalPages: engineFirst!.pageCount, pages: [], fullText: "", isScanned: false }
+        : await extractTextFromPDFClient(
         arrayBuffer,
         (curr, total, msg) => {
           setProgress({

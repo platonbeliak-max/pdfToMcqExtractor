@@ -19,7 +19,7 @@ const RE = {
   status:
     /^(верно|неверно|выполнен[оа]?|не\s+выполнен[оа]?|завершено|не\s+завершено|complete|incomplete|частично\s+правильн[а-яёa-z]*|частично\s+верн[а-яёa-z]*|нет\s+ответа|не\s+отвечено|ответ\s+сохран[её]н|не\s+оценено|correct|incorrect|partially\s+correct|not\s+answered|answer\s+saved|not\s+yet\s+answered|requires\s+grading)$/i,
   score:
-    /^(?:баллов|балл|баллы|оценка|mark|marks|points?|score)\s*:?\s*([\d.,]+)\s*(?:из|out\s+of|of|\/)\s*([\d.,]+)\s*(?:\(.*\))?$/i,
+    /^(?:баллов|балл|баллы|оценка|mark|marks|points?|score)\s*:?\s*(-?[\d.,]+)\s*(?:из|out\s+of|of|\/)\s*([\d.,]+)\s*(?:\(.*\))?$/i,
   scoreMaxOnly: /^(?:максимальный\s+балл|макс\.?\s*балл|marked\s+out\s+of|максимум)\s*:?\s*([\d.,]+)$/i,
   flag: /^(?:отметить\s+вопрос|flag\s+question|убрать\s+отметку|remove\s+flag|текст\s+вопроса|question\s+text|информация|information)$/i,
   attemptMeta:
