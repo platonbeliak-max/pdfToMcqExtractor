@@ -74,6 +74,9 @@ async function auditFile(file: string): Promise<{ findings: Finding[]; stats: Re
     );
   }
 
+  if (!questions.length && !merged.length) {
+  findings.push({ code: "NO_QUESTIONS", severity: "error", where: "документ", text: "ни вопросов, ни рисунков: это не тест (например, подписи к атласу) или формат не распознан" });
+  }
   for (const p of pages) for (const e of p.readErrors ?? []) findings.push({ code: "PAGE_READ_ERROR", severity: "error", where: `стр.${p.pageNumber}`, text: e });
 
   for (const q of questions) {

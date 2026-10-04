@@ -55,7 +55,8 @@ function pageTokens(pg: PageInput): Tok[] {
       broke = true;
       continue;
     }
-    const field = /⟪/.test(it.str);
+    // A lone icon-font glyph is the dropdown arrow Moodle draws inside an answer field.
+    const field = /⟪/.test(it.str) || /^[\uE000-\uF8FF\s]+$/.test(it.str);
     const s = cleanWord(it.str);
     if (!s.trim()) continue;
     const h = it.h || 8;
@@ -85,6 +86,10 @@ function pageTokens(pg: PageInput): Tok[] {
 function tidyLabel(words: string[]): string {
   const text = words
     .join(" ")
+    // Icon-font glyphs (Wingdings/FontAwesome arrows and bullets) sit in the private-use area: invisible, but they break word matching.
+    .replace(/[\uE000-\uF8FF\u00AD\u200B-\u200F\u2028\u2029\uFEFF\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, " ")
+    .replace(/\u0138/g, "к")
+    .replace(/\u00A0/g, " ")
     .replace(/([а-яё]{3,})([А-ЯЁ][а-яё])/g, "$1 $2")
     .replace(/\s*(?:Вопрос|Question)\s*\d+.*$/i, "")
     .replace(/\s+(?:Баллов|Балл|Marks?|Points?|Отметить|Flag|Оценка)(?![а-яёa-z]).*$/i, "")
@@ -383,6 +388,8 @@ export function figureNoise(drafts: FigureDraft[]): (q: { question: string; opti
   for (const d of drafts) {
     for (let p = d.startPage; p <= d.endPage; p++) pages.add(p);
     pages.add(d.imagePage);
+    // The question header ("Вопрос N / Баллов …") often sits on the page before its figure.
+    if (d.startPage > 1) pages.add(d.startPage - 1);
     for (const l of d.labels) for (const w of l.text.toLowerCase().split(/[^\p{L}]+/u)) if (w.length >= 4) vocab.add(w.replace(/ё/g, "е"));
   }
   return (q) => {
