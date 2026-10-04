@@ -88,13 +88,32 @@ function editDistance(a: string, b: string): number {
 }
 
 /** Accepts ё/е, Latin look-alikes, numeric "0,5"="0.5" and small typos (~1 per 6 letters). */
+const LATIN_TO_CYRILLIC: Record<string, string> = {
+  a: "а", c: "с", e: "е", o: "о", p: "р", x: "х", y: "у", k: "к", m: "м", t: "т", b: "в", h: "н",
+};
+
+function foldMixedAlphabet(s: string): string {
+  return s.replace(/[\p{L}]+/gu, (word) =>
+    /[\u0400-\u04FF]/.test(word) && /[a-z]/.test(word)
+      ? [...word].map((ch) => LATIN_TO_CYRILLIC[ch] ?? ch).join("")
+      : word,
+  );
+}
+
+function asNumber(s: string): number | null {
+  const compact = s.trim().replace(/\s+/g, "").replace(/(\d),(\d)/g, "$1.$2");
+  return /^-?\d+(\.\d+)?$/.test(compact) ? Number(compact) : null;
+}
+
 function textMatches(typed: string, expected: string): boolean {
-  const canon = (s: string) => norm(s.replace(/ё/gi, "е").replace(/(\d),(\d)/g, "$1.$2")).replace(/\s/g, "");
+  const canon = (s: string) => norm(foldMixedAlphabet(s.toLowerCase().replace(/ё/g, "е"))).replace(/[\s\-–—]/g, "");
+  const numTyped = asNumber(typed);
+  const numExpected = asNumber(expected);
+  if (numExpected !== null) return numTyped !== null && numTyped === numExpected;
   const a = canon(typed);
   const b = canon(expected);
   if (!a) return false;
   if (a === b) return true;
-  if (/^[\d.]+$/.test(b)) return Number(a) === Number(b);
   return editDistance(a, b) <= Math.floor(b.length / 6);
 }
 
@@ -295,7 +314,7 @@ export function TestView({
     setChecked(true);
   };
   const canCheck = item.figure
-    ? item.options.every((o) => ans.labels?.[o.key])
+    ? item.options.some((o) => ans.labels?.[o.key]?.trim())
     : item.correct.length
       ? ans.picked.length > 0
       : ans.typed.trim().length > 0;

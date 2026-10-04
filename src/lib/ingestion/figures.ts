@@ -87,6 +87,7 @@ function tidyLabel(words: string[]): string {
     .join(" ")
     .replace(/([а-яё]{3,})([А-ЯЁ][а-яё])/g, "$1 $2")
     .replace(/\s*(?:Вопрос|Question)\s*\d+.*$/i, "")
+    .replace(/\s+(?:Баллов|Балл|Marks?|Points?|Отметить|Flag|Оценка)(?![а-яёa-z]).*$/i, "")
     .replace(/\s+(?:Выполнен[оа]?|Complete[d]?|Верно|Неверно|Correct|Incorrect)\s*$/i, "")
     .replace(/\s*-\s*/g, "-")
     .replace(/\s+([,.;:])/g, "$1")
