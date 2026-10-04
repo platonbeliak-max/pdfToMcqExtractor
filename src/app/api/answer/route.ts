@@ -37,6 +37,53 @@ function coverage(needles: string[], haystack: Set<string>): number {
   return needles.length ? needles.filter((w) => haystack.has(w)).length / needles.length : 0;
 }
 
+/** Short roots survive Russian case endings ("мышцу"/"мышца", "трапециевидную"/"трапециевидной"). */
+function roots(text: string): string[] {
+  return Array.from(
+    new Set(
+      (text.toLowerCase().match(/[a-zа-яё]{4,}/gi) ?? [])
+        .filter((w) => !STOP_WORDS.has(w))
+        .map((w) => w.replace(/ё/g, "е").slice(0, 4)),
+    ),
+  );
+}
+
+function sentencesOf(text: string): string[] {
+  return text.split(/(?<=[.!?;])\s+|\n+/).filter((s) => s.length > 15 && s.length < 1200);
+}
+
+/**
+ * How strongly one sentence ties the option to the question: the option must be named in the sentence
+ * (or the sentence belongs to the option's own article) and the question's own key words must sit beside it.
+ */
+function sentenceEvidence(question: string, optionText: string, docs: Doc[], ownDoc: Doc | undefined): number {
+  const optionRoots = roots(optionText);
+  // Long words ("трапециевидную") name the topic; short ones ("мышцу") appear everywhere, so weight by length.
+  const weights = new Map<string, number>();
+  for (const w of question.toLowerCase().match(/[a-zа-яё]{4,}/gi) ?? []) {
+    if (STOP_WORDS.has(w)) continue;
+    const r = w.replace(/ё/g, "е").slice(0, 4);
+    if (!optionRoots.includes(r)) weights.set(r, Math.max(weights.get(r) ?? 0, w.length));
+  }
+  const total = [...weights.values()].reduce((a, b) => a + b, 0);
+  if (total === 0 || optionRoots.length === 0) return 0;
+  let best = 0;
+  let strongHits = 0;
+  const consider = (sentence: string, mustNameOption: boolean) => {
+    const set = new Set(roots(sentence));
+    if (mustNameOption && coverage(optionRoots, set) < 0.75) return;
+    let found = 0;
+    for (const [r, w] of weights) if (set.has(r)) found += w;
+    const score = found / total;
+    if (score > best) best = score;
+    if (score >= 0.66) strongHits++;
+  };
+  for (const doc of docs) for (const s of sentencesOf(doc.text)) consider(s, true);
+  if (ownDoc) for (const s of sentencesOf(ownDoc.text)) consider(s, false);
+  // Repeated strong sentences break ties between options that each have one lucky match.
+  return best + Math.min(strongHits, 5) * 0.01;
+}
+
 function countPhrase(text: string, phrase: string): number {
   const p = phrase.toLowerCase().replace(/\s+/g, " ").trim();
   if (p.length < 4) return 0;
@@ -331,7 +378,65 @@ function uniqueSources(docs: (Doc | undefined)[], limit = 6) {
     .map((d) => ({ title: d.title, url: d.url, kind: d.kind }));
 }
 
+const TRUE_WORDS = /^(верно|правильно|да|true|yes|correct)$/i;
+const FALSE_WORDS = /^(неверно|неправильно|нет|false|no|incorrect)$/i;
+
+/**
+ * "Верно/Неверно": the statement counts as true only when one article sentence restates nearly all of it
+ * with the same negation. Absence of such a sentence is not proof of falsehood, so that case stays unanswered.
+ */
+async function statementLookup(
+  statement: string,
+  trueKey: string,
+  trueText: string,
+  falseKey: string,
+  falseText: string,
+): Promise<Response> {
+  const lang: "ru" | "en" = /[а-яё]/i.test(statement) ? "ru" : "en";
+  const wanted = roots(statement);
+  if (wanted.length < 3) return Response.json({ error: "no_answer" }, { status: 404 });
+  const [a, b] = await Promise.all([
+    wikiSearch(lang, keywords(statement, 5), 4).catch(() => [] as Doc[]),
+    wikiSearch(lang, keywords(statement, 3), 3).catch(() => [] as Doc[]),
+  ]);
+  const docs = [...a, ...b];
+  if (docs.length === 0) throw new SourcesUnavailableError();
+  const negated = (s: string) => /(^|\s)(не|нет|ни|not|no|never)\s/i.test(` ${s.toLowerCase()} `);
+  const statementNegated = negated(statement);
+  let best: { doc: Doc; score: number; same: boolean } | null = null;
+  for (const doc of docs) {
+    for (const sentence of sentencesOf(doc.text)) {
+      const score = coverage(wanted, new Set(roots(sentence)));
+      const same = negated(sentence) === statementNegated;
+      // On equal coverage prefer the sentence with matching polarity: a contradiction needs stronger proof.
+      if (!best || score > best.score || (score === best.score && same && !best.same)) best = { doc, score, same };
+    }
+  }
+  if (!best || best.score < (best.same ? 0.8 : 0.9)) return Response.json({ error: "no_answer" }, { status: 404 });
+  const ru = lang === "ru";
+  const isTrue = best.same;
+  return Response.json({
+    keys: [isTrue ? trueKey : falseKey],
+    answerText: isTrue ? trueText : falseText,
+    explanation: ru
+      ? isTrue
+        ? `Утверждение почти дословно подтверждено текстом статьи «${best.doc.rawTitle}». Ответ подобран автоматически по источникам, без ИИ.`
+        : `В статье «${best.doc.rawTitle}» то же утверждение сформулировано с противоположным отрицанием. Ответ подобран автоматически по источникам, без ИИ.`
+      : isTrue
+        ? `The statement is restated almost verbatim in “${best.doc.rawTitle}”. Picked automatically from sources, without AI.`
+        : `“${best.doc.rawTitle}” states the same thing with the opposite negation. Picked automatically from sources, without AI.`,
+    confidence: best.score === 1 ? "medium" : "low",
+    mode: "free",
+    sources: uniqueSources([best.doc]),
+  });
+}
+
 async function choiceLookup(question: string, allOptions: { key: string; text: string }[]): Promise<Response> {
+  const trueOption = allOptions.find((o) => TRUE_WORDS.test(o.text.trim()));
+  const falseOption = allOptions.find((o) => FALSE_WORDS.test(o.text.trim()));
+  if (allOptions.length === 2 && trueOption && falseOption) {
+    return statementLookup(question, trueOption.key, trueOption.text, falseOption.key, falseOption.text);
+  }
   const options = allOptions.slice(0, 8);
   const lang: "ru" | "en" = /[а-яё]/i.test(question) ? "ru" : "en";
   const questionStems = Array.from(new Set(stems(question)));
@@ -389,6 +494,15 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
 
   const checks: Check[] = [];
 
+  checks.push({
+    label: lang === "ru" ? "предложения статей, где вариант стоит рядом с ключевыми словами вопроса" : "article sentences pairing the option with the question's key words",
+    winner: pickWinner(
+      options.map((o, i) => sentenceEvidence(question, o.text, questionDocs, ownDocs[i])),
+      0.65,
+      0.15,
+    ),
+  });
+
   const generalText = questionDocs.map((d) => d.text).join(" ").toLowerCase();
   const generalStems = new Set(stems(generalText));
   checks.push({
@@ -438,16 +552,24 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
     });
   }
 
+  // The first three checks read what articles actually say; the rest only count co-occurrences, which
+  // favour frequently mentioned organs like "liver", so they weigh a quarter as much.
+  const contentLabels = new Set(checks.slice(0, 3).map((c) => c.label));
+  const weightOf = (label: string) => (contentLabels.has(label) ? 2 : 0.5);
   const votes = new Map<number, string[]>();
   checks.forEach((c) => {
     if (c.winner >= 0) votes.set(c.winner, [...(votes.get(c.winner) ?? []), c.label]);
   });
-  const ranked = [...votes.entries()].sort((a, b) => b[1].length - a[1].length);
+  const scoreOf = (labels: string[]) => labels.reduce((sum, l) => sum + weightOf(l), 0);
+  const ranked = [...votes.entries()].sort((a, b) => scoreOf(b[1]) - scoreOf(a[1]));
   const top = ranked[0];
-  // Co-occurrence counts (English phrase hits, Europe PMC) favour common organs like "liver"; at least one check must read article content.
-  const contentLabels = new Set(checks.slice(0, 2).map((c) => c.label));
   const hasContentVote = !!top && top[1].some((label) => contentLabels.has(label));
-  if (!top || ranked.length > 1 || top[1].length < 2 || !hasContentVote) {
+  const topScore = top ? scoreOf(top[1]) : 0;
+  const runnerUpScore = ranked[1] ? scoreOf(ranked[1][1]) : 0;
+  const runnerUp = ranked[1]?.[1].length ?? 0;
+  // Two content checks pointing at different options cancel out; weak co-occurrence votes cannot outvote content.
+  const accepted = !!top && hasContentVote && topScore - runnerUpScore >= 1;
+  if (!accepted) {
     return Response.json(
       { error: "no_answer", debug: { checks, questionEnglish, optionEnglish, hitCounts, own: ownDocs.map((d) => d?.rawTitle), q: questionDocs.map((d) => d.rawTitle) } },
       { status: 404 },
@@ -463,7 +585,7 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
     explanation: ru
       ? `Подтверждено ${agreed.length} из ${checks.length} независимых проверок по открытым источникам: ${agreed.join("; ")}. Ответ подобран автоматически, без ИИ — сверьтесь со ссылками.`
       : `Confirmed by ${agreed.length} of ${checks.length} independent checks against open sources: ${agreed.join("; ")}. Picked automatically, without AI — please verify via the links.`,
-    confidence: agreed.length >= 3 ? "high" : agreed.length === 2 ? "medium" : "low",
+    confidence: topScore >= 4 && runnerUp === 0 ? "high" : topScore - runnerUpScore >= 2.5 ? "medium" : "low",
     mode: "free",
     sources: uniqueSources([ownDocs[winnerIndex], ...questionDocs, ...englishDocs, ...scientificDocs]),
   });
@@ -532,82 +654,5 @@ export async function POST(req: Request) {
   } catch (err) {
     if (!(err instanceof SourcesUnavailableError)) console.error("[answer] free lookup failed:", err);
   }
-  if (free?.ok) return free;
-
-  if (!process.env.GROQ_API_KEY) return Response.json({ error: "missing_key" }, { status: 500 });
-  try {
-    return Response.json(await aiLookup(question, options));
-  } catch (err) {
-    if (err instanceof AiRateLimited) return Response.json({ error: "rate_limited" }, { status: 429 });
-    console.error("[answer] AI fallback failed:", err);
-    return Response.json({ error: "Lookup failed" }, { status: 502 });
-  }
-}
-
-class AiRateLimited extends Error {}
-
-// Groq's free tier caps tokens per minute per model, so rotating models multiplies throughput.
-const GROQ_MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"];
-
-async function groqJson(system: string, prompt: string): Promise<unknown> {
-  for (const model of GROQ_MODELS) {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: prompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(25_000),
-    });
-    if (res.status === 429 || res.status === 503) continue;
-    if (!res.ok) throw new Error(`groq ${model} ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const data = (await res.json()) as { choices: { message: { content: string } }[] };
-    const content = data.choices[0]?.message?.content ?? "";
-    return JSON.parse(content.slice(content.indexOf("{"), content.lastIndexOf("}") + 1));
-  }
-  throw new AiRateLimited();
-}
-
-const aiSchema = z.object({
-  keys: z.array(z.string()).describe("Keys of the correct options; empty when there are no options"),
-  answerText: z.string().describe("The answer itself: option text(s), or the word/term for open questions"),
-  explanation: z.string().describe("1–2 sentence justification in the question's language"),
-  confidence: z.enum(["high", "medium", "low"]),
-});
-
-async function aiLookup(question: string, options: { key: string; text: string }[]) {
-  const ru = /[а-яё]/i.test(question);
-  const output = aiSchema.parse(
-    await groqJson(
-      "Ты — эксперт-преподаватель медицинского вуза (анатомия, топографическая анатомия, оперативная хирургия, физиология и т.д.). " +
-      "Всегда давай ответ — даже если вопрос распознан с шумом OCR или частично обрезан: опирайся на смысл и выбери наиболее вероятный ответ. " +
-      "Для вопросов с вариантами верни ключи всех правильных вариантов (может быть несколько). " +
-      "Для открытых вопросов и вопросов с пропуском верни короткое слово или термин, который нужно вписать. " +
-      "Если в формулировке уже содержится ответ (например «…называется канюля Люэра, в ответе указать эпоним»), верни именно это слово (Люэр). " +
-      "Для «Верно/Неверно» выбери соответствующий вариант. Отвечай на языке вопроса. " +
-      'Верни только JSON: {"keys": string[], "answerText": string, "explanation": string, "confidence": "high"|"medium"|"low"}.',
-      options.length > 0
-        ? `Вопрос: ${question}\n\nВарианты:\n${options.map((o) => `${o.key}) ${o.text}`).join("\n")}`
-        : `Вопрос (открытый, без вариантов): ${question}`,
-    ),
-  );
-  const valid = new Set(options.map((o) => o.key.toUpperCase()));
-  const keys = output.keys.map((k) => k.trim().toUpperCase().replace(/[^A-ZА-Я0-9]/g, "")).filter((k) => valid.has(k));
-  const answerText =
-    keys.length > 0 ? options.filter((o) => keys.includes(o.key.toUpperCase())).map((o) => o.text).join("; ") : output.answerText.trim();
-  if (!answerText) throw new Error("empty AI answer");
-  return {
-    keys,
-    answerText,
-    explanation: output.explanation + (ru ? " (Ответ ИИ — мед. источники не дали однозначного подтверждения.)" : " (AI answer — open sources were not conclusive.)"),
-    confidence: output.confidence,
-    mode: "ai" as const,
-    sources: [],
-  };
+  return free ?? Response.json({ error: "no_answer" }, { status: 404 });
 }

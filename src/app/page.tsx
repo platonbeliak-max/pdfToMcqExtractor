@@ -142,7 +142,7 @@ export default function Home() {
   useEffect(() => {
     latestBankRef.current = allQuestions;
     const isTarget = (q: StructuredQuestion) =>
-      !hasAnswer(q) &&
+      (!hasAnswer(q) || (q.answerOrigin === "ai" && q.aiMode === "ai")) &&
       (q.lookupVersion ?? 0) < LOOKUP_VERSION &&
       !autoFailedRef.current.has(q.id) &&
       q.question.text.trim().length >= 3;
@@ -174,7 +174,11 @@ export default function Home() {
           found++;
         } catch (err) {
           if (err instanceof NoAnswerError) {
-            commit({ ...target, aiTried: true, lookupVersion: LOOKUP_VERSION });
+            const stripped =
+              target.aiMode === "ai"
+                ? { answer: null, answerOrigin: undefined, aiMode: undefined, aiSources: undefined, aiConfidence: undefined, explanation: undefined }
+                : {};
+            commit({ ...target, ...stripped, aiTried: true, lookupVersion: LOOKUP_VERSION });
           } else if (err instanceof AiRateLimitError || err instanceof AiBillingError) {
             autoBlockedRef.current = true;
           } else {

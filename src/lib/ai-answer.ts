@@ -28,7 +28,7 @@ export class NoAnswerError extends Error {
 }
 
 // Bumping this re-queues questions an older lookup gave up on.
-export const LOOKUP_VERSION = 2;
+export const LOOKUP_VERSION = 3;
 
 const RATE_LIMIT_RETRIES = 3;
 const RATE_LIMIT_WAIT_MS = 10_000;
