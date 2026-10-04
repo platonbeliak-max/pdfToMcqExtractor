@@ -79,7 +79,7 @@ export async function lookupMany(
   targets: StructuredQuestion[],
   onResult: (q: StructuredQuestion) => void,
   onProgress: (done: number, failed: number) => void,
-  concurrency = 1
+  concurrency = 3
 ): Promise<void> {
   let next = 0;
   let done = 0;

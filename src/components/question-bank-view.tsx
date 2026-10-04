@@ -120,15 +120,15 @@ export function QuestionBankView({
     );
     onUpdateQuestions(updated);
     persistQuestions(updated);
-    showToast("Question Approved", "Question marked as verified in Question Bank", "success");
+    showToast(t("bkApprovedT"), t("bkApprovedD"), "success");
   };
 
   const handleDeleteSingle = (id: string) => {
-    if (!confirm("Are you sure you want to delete this question?")) return;
+    if (!confirm(t("bkConfirmOne"))) return;
     const updated = questions.filter((q) => q.id !== id);
     onUpdateQuestions(updated);
     persistQuestions(updated);
-    showToast("Question Deleted", "Question removed from Question Bank", "info");
+    showToast(t("bkDeletedT"), t("bkDeletedD"), "info");
   };
 
   const handleBulkApprove = () => {
@@ -140,17 +140,17 @@ export function QuestionBankView({
     );
     onUpdateQuestions(updated);
     persistQuestions(updated);
-    showToast("Bulk Approved", `Approved ${selectedIds.size} questions`, "success");
+    showToast(t("bkBulkApprovedT"), t("bkBulkApprovedD", { n: selectedIds.size }), "success");
     setSelectedIds(new Set());
   };
 
   const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Delete ${selectedIds.size} selected questions?`)) return;
+    if (!confirm(t("bkConfirmMany", { n: selectedIds.size }))) return;
     const updated = questions.filter((q) => !selectedIds.has(q.id));
     onUpdateQuestions(updated);
     persistQuestions(updated);
-    showToast("Bulk Deleted", `Removed ${selectedIds.size} questions`, "info");
+    showToast(t("bkBulkDeletedT"), t("bkBulkDeletedD", { n: selectedIds.size }), "info");
     setSelectedIds(new Set());
   };
 
@@ -161,7 +161,7 @@ export function QuestionBankView({
         : questions;
     const csvContent = exportToStandardCSV(target);
     downloadCsvFile(csvContent, `question-bank-${Date.now()}.csv`);
-    showToast("CSV Exported", `Exported ${target.length} questions conforming to Section 46`, "success");
+    showToast(t("bkCsvT"), t("bkCsvD", { n: target.length }), "success");
   };
 
   const handleExportSelectedSvgZip = async () => {
@@ -170,7 +170,7 @@ export function QuestionBankView({
         ? questions.filter((q) => selectedIds.has(q.id))
         : questions;
     await downloadBulkSvgZip(target);
-    showToast("Bulk SVG Export", `Generated ZIP bundle with ${target.length} SVG files`, "success");
+    showToast(t("bkSvgT"), t("bkSvgD", { n: target.length }), "success");
   };
 
   const handleSaveEditedQuestion = (updatedMCQ: MCQQuestion) => {
@@ -179,7 +179,7 @@ export function QuestionBankView({
     onUpdateQuestions(updated);
     persistQuestions(updated);
     setEditTargetQuestion(null);
-    showToast("Question Updated", "Changes saved to Question Bank", "success");
+    showToast(t("bkUpdatedT"), t("bkUpdatedD"), "success");
   };
 
   const applyAiResult = (result: StructuredQuestion) => {
@@ -347,7 +347,7 @@ export function QuestionBankView({
         {selectedIds.size > 0 && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/50">
             <span className="font-bold text-blue-700 dark:text-blue-300 text-xs">
-              {selectedIds.size} selected
+              {t("bkSelected", { n: selectedIds.size })}
             </span>
             <button
               onClick={handleBulkApprove}
@@ -355,7 +355,7 @@ export function QuestionBankView({
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors"
             >
               <CheckCircle2 className="w-3 h-3" />
-              Approve
+              {t("bkApprove")}
             </button>
             <button
               onClick={handleBulkDelete}
@@ -363,7 +363,7 @@ export function QuestionBankView({
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] transition-colors"
             >
               <Trash2 className="w-3 h-3" />
-              Delete
+              {t("bkDelete")}
             </button>
           </div>
         )}
@@ -433,7 +433,7 @@ export function QuestionBankView({
                     {isDuplicate && (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-500/30">
                         <AlertTriangle className="w-3 h-3" />
-                        Duplicate
+                        {t("bkDuplicate")}
                       </span>
                     )}
 

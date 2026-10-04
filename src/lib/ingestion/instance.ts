@@ -26,6 +26,7 @@ import {
   uuid,
 } from "./text";
 import { detectQuestionType } from "./qtype";
+import { normalizeBlanks, repairStemAndOptions, splitFilledAnswer } from "./repair";
 
 const SELECTED_BULLETS = ["●", "◉", "☑", "■", "⬤", "☒"];
 const UNSELECTED_BULLETS = ["○", "◦", "☐", "□", "◯", "◎"];
@@ -196,7 +197,7 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
   // look like an LMS answer list, keep them in the stem (do not invent options).
 
   const marks: VisualMark[] = [];
-  const options: AnswerOption[] = optionLines.map((ol, idx) => {
+  let options: AnswerOption[] = optionLines.map((ol, idx) => {
     const id = uuid();
     const first = ol.lines[0];
     const meta = ol.meta;
@@ -289,6 +290,18 @@ export function buildInstance(block: RawBlock, ctx: InstanceBuildContext): Quest
     if (tail && tail[1].length >= 15 && tail[2].split(/\s+/).length <= 4) {
       stem = tail[1].trim();
       inlineCorrectAnswer = tail[2].trim();
+    }
+  }
+
+  // Screenshot noise, labels glued into neighbouring text and answers typed into the stem.
+  const repaired = repairStemAndOptions(stem, options, lines[0].page);
+  stem = normalizeBlanks(repaired.stem);
+  options = repaired.options;
+  if (options.length === 0 && !studentResponse && !inlineCorrectAnswer) {
+    const filled = splitFilledAnswer(stem);
+    if (filled) {
+      stem = filled.stem;
+      inlineCorrectAnswer = filled.answer;
     }
   }
 

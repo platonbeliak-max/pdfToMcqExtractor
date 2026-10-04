@@ -21,6 +21,7 @@ import {
 } from "@/lib/export";
 import { useToast } from "./toast";
 import confetti from "canvas-confetti";
+import { useT } from "@/lib/i18n";
 
 interface ExportMenuProps {
   questions: MCQQuestion[];
@@ -32,6 +33,7 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
   const [isExporting, setIsExporting] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
+  const { t } = useT();
 
   const baseName = filename.replace(/\.[^/.]+$/, "");
 
@@ -68,7 +70,7 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
   const handleCopyAll = () => {
     const text = formatAllQuestionsText(questions);
     navigator.clipboard.writeText(text);
-    showToast("Copied All Questions!", `${questions.length} questions copied to clipboard`, "success");
+    showToast(t("expCopiedT"), t("expCopiedD", { n: questions.length }), "success");
     setIsOpen(false);
   };
 
@@ -76,7 +78,7 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
     const text = formatAllQuestionsText(questions);
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     triggerDownload(blob, "txt");
-    showToast("Downloaded TXT File", `${questions.length} questions saved`, "success");
+    showToast(t("expTxtT"), t("expTxtD", { n: questions.length }), "success");
     setIsOpen(false);
   };
 
@@ -84,7 +86,7 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
     const jsonStr = exportToJSON(questions);
     const blob = new Blob([jsonStr], { type: "application/json;charset=utf-8" });
     triggerDownload(blob, "json");
-    showToast("Downloaded JSON File", "Structured JSON format", "success");
+    showToast(t("expJsonT"), t("expJsonD"), "success");
     setIsOpen(false);
   };
 
@@ -92,7 +94,7 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
     const csvStr = exportToCSV(questions);
     const blob = new Blob([csvStr], { type: "text/csv;charset=utf-8" });
     triggerDownload(blob, "csv");
-    showToast("Downloaded CSV File", "Ready for Excel & Google Sheets", "success");
+    showToast(t("expCsvT"), t("expCsvD"), "success");
     setIsOpen(false);
   };
 
@@ -103,9 +105,9 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
       triggerDownload(blob, "xlsx");
-      showToast("Downloaded Excel (.xlsx)", "Formatted spreadsheet with columns", "success");
+      showToast(t("expXlsxT"), t("expXlsxD"), "success");
     } catch (err) {
-      showToast("Failed to generate Excel file", String(err), "error");
+      showToast(t("expXlsxErr"), String(err), "error");
     }
     setIsOpen(false);
   };
@@ -115,9 +117,9 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
       setIsExporting(true);
       const blob = await exportToWord(questions);
       triggerDownload(blob, "docx");
-      showToast("Downloaded Word Document (.docx)", "Styled examination format", "success");
+      showToast(t("expDocxT"), t("expDocxD"), "success");
     } catch (err) {
-      showToast("Failed to generate Word document", String(err), "error");
+      showToast(t("expDocxErr"), String(err), "error");
     } finally {
       setIsExporting(false);
       setIsOpen(false);
@@ -128,17 +130,19 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
     <div className="relative inline-block text-left" ref={menuRef}>
       <button
         type="button"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
         disabled={questions.length === 0 || isExporting}
         className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold shadow-xs transition-colors"
       >
         <Download className="w-4 h-4" />
-        <span>Export Question Bank</span>
+        <span>{t("expTitle")}</span>
         <ChevronDown className="w-3.5 h-3.5 opacity-80" />
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl z-30 py-2 divide-y divide-slate-100 dark:divide-slate-800 animate-in fade-in-50 zoom-in-95">
+        <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl z-30 py-2 divide-y divide-slate-100 dark:divide-slate-800 animate-in fade-in-50 zoom-in-95">
           {/* Quick Copy */}
           <div className="py-1">
             <button
@@ -147,8 +151,8 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
             >
               <Copy className="w-4 h-4 text-blue-500" />
               <div className="text-left">
-                <div className="font-semibold">Copy All to Clipboard</div>
-                <div className="text-[10px] text-slate-400">Plain text formatted</div>
+                <div className="font-semibold">{t("expCopy")}</div>
+                <div className="text-[10px] text-slate-400">{t("expCopySub")}</div>
               </div>
             </button>
           </div>
@@ -161,8 +165,8 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
             >
               <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
               <div className="text-left">
-                <div className="font-semibold">Excel Spreadsheet (.xlsx)</div>
-                <div className="text-[10px] text-slate-400">Columns with options</div>
+                <div className="font-semibold">{t("expXlsx")}</div>
+                <div className="text-[10px] text-slate-400">{t("expXlsxSub")}</div>
               </div>
             </button>
 
@@ -173,8 +177,8 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
             >
               <FileText className="w-4 h-4 text-blue-600" />
               <div className="text-left">
-                <div className="font-semibold">Word Document (.docx)</div>
-                <div className="text-[10px] text-slate-400">Formatted question sheet</div>
+                <div className="font-semibold">{t("expDocx")}</div>
+                <div className="text-[10px] text-slate-400">{t("expDocxSub")}</div>
               </div>
             </button>
 
@@ -184,8 +188,8 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
             >
               <File className="w-4 h-4 text-emerald-600" />
               <div className="text-left">
-                <div className="font-semibold">Standard CSV (.csv)</div>
-                <div className="text-[10px] text-slate-400">Section 46 format (UTF-8 BOM)</div>
+                <div className="font-semibold">{t("expCsv")}</div>
+                <div className="text-[10px] text-slate-400">{t("expCsvSub")}</div>
               </div>
             </button>
 
@@ -195,17 +199,17 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
                 try {
                   const { downloadBulkSvgZip } = await import("@/lib/svg/svg-generator");
                   await downloadBulkSvgZip(questions);
-                  showToast("Bulk SVG Export", `Downloaded ${questions.length} SVG files in ZIP bundle`, "success");
+                  showToast(t("expSvgT"), t("expSvgD", { n: questions.length }), "success");
                 } catch (e) {
-                  showToast("SVG Export Error", String(e), "error");
+                  showToast(t("expSvgErr"), String(e), "error");
                 }
               }}
               className="flex items-center gap-3 w-full px-4 py-2 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
             >
               <FileCode className="w-4 h-4 text-amber-500" />
               <div className="text-left">
-                <div className="font-semibold">Vector SVG Bundle (.zip)</div>
-                <div className="text-[10px] text-slate-400">Pure vector semantic SVG cards</div>
+                <div className="font-semibold">{t("expSvg")}</div>
+                <div className="text-[10px] text-slate-400">{t("expSvgSub")}</div>
               </div>
             </button>
 
@@ -215,8 +219,8 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
             >
               <FileCode className="w-4 h-4 text-purple-600" />
               <div className="text-left">
-                <div className="font-semibold">JSON Format (.json)</div>
-                <div className="text-[10px] text-slate-400">Structured API schema</div>
+                <div className="font-semibold">{t("expJson")}</div>
+                <div className="text-[10px] text-slate-400">{t("expJsonSub")}</div>
               </div>
             </button>
 
@@ -226,8 +230,8 @@ export function ExportMenu({ questions, filename = "mcq-bank" }: ExportMenuProps
             >
               <FileText className="w-4 h-4 text-slate-500" />
               <div className="text-left">
-                <div className="font-semibold">Plain Text (.txt)</div>
-                <div className="text-[10px] text-slate-400">Clean formatted text</div>
+                <div className="font-semibold">{t("expTxt")}</div>
+                <div className="text-[10px] text-slate-400">{t("expTxtSub")}</div>
               </div>
             </button>
           </div>

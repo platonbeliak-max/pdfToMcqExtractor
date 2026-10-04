@@ -291,7 +291,7 @@ export function QuestionCard({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (confirm(`Delete Question ${question.number}?`)) {
+              if (confirm(t("qcConfirmDel", { n: question.number }))) {
                 onDelete(question.id);
               }
             }}

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 
 export const maxDuration = 60;
@@ -55,31 +56,65 @@ interface Doc {
 
 const UA = { "User-Agent": "pdf-mcq-study-app/1.0 (educational)" };
 
-const MAX_PARALLEL = 3;
-let running = 0;
-const waiting: (() => void)[] = [];
+interface HostLimiter {
+  max: number;
+  running: number;
+  waiting: (() => void)[];
+  pausedUntil: number;
+}
+
+const limiters = new Map<string, HostLimiter>();
 const cache = new Map<string, string>();
 
-async function slot<T>(task: () => Promise<T>): Promise<T> {
-  if (running >= MAX_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
-  running++;
+// Wikipedia answers 429 to bursts, so it gets a small shared budget; other hosts tolerate more.
+function limiterFor(url: string): HostLimiter {
+  const host = new URL(url).hostname;
+  const key = host.endsWith("wikipedia.org") ? "wikipedia" : host;
+  let limiter = limiters.get(key);
+  if (!limiter) {
+    limiter = { max: key === "wikipedia" ? 2 : 5, running: 0, waiting: [], pausedUntil: 0 };
+    limiters.set(key, limiter);
+  }
+  return limiter;
+}
+
+async function withLimiter<T>(limiter: HostLimiter, task: () => Promise<T>): Promise<T> {
+  if (limiter.running >= limiter.max) await new Promise<void>((resolve) => limiter.waiting.push(resolve));
+  limiter.running++;
   try {
+    const pause = limiter.pausedUntil - Date.now();
+    if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause));
     return await task();
   } finally {
-    running--;
-    waiting.shift()?.();
+    limiter.running--;
+    limiter.waiting.shift()?.();
   }
 }
 
-/** Polite fetch for the free public APIs: shared concurrency limit, in-memory cache, backoff on 429. */
+const MAX_ATTEMPTS = 2;
+const MAX_PAUSE_MS = 2500;
+const REQUEST_BUDGET_MS = 14_000;
+const FETCH_TIMEOUT_MS = 5_000;
+
+const budget = new AsyncLocalStorage<{ deadline: number }>();
+
+/** Polite fetch for the free public APIs: per-host concurrency limit, in-memory cache, shared pause on 429, one time budget per question. */
 async function fetchBody(url: string): Promise<string | null> {
   const cached = cache.get(url);
   if (cached !== undefined) return cached;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const outcome = await slot(async () => {
+  const limiter = limiterFor(url);
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const outcome = await withLimiter(limiter, async () => {
+      const left = (budget.getStore()?.deadline ?? Infinity) - Date.now();
+      if (left < 600) return null;
       try {
-        const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(12_000) });
-        if (res.status === 429 || res.status >= 500) return "retry" as const;
+        const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(Math.min(FETCH_TIMEOUT_MS, left)) });
+        if (res.status === 429 || res.status >= 500) {
+          const asked = Number(res.headers.get("retry-after"));
+          const pause = Math.min(MAX_PAUSE_MS, (Number.isFinite(asked) && asked > 0 ? asked * 1000 : 1200) * (attempt + 1));
+          limiter.pausedUntil = Math.max(limiter.pausedUntil, Date.now() + pause);
+          return "retry" as const;
+        }
         return res.ok ? await res.text() : null;
       } catch {
         return "retry" as const;
@@ -92,7 +127,6 @@ async function fetchBody(url: string): Promise<string | null> {
       }
       return outcome;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
   }
   return null;
 }
@@ -119,38 +153,16 @@ class SourcesUnavailableError extends Error {
 
 interface WikiApiPage {
   title: string;
+  index?: number;
   extract?: string;
+  missing?: boolean;
+  pageprops?: { disambiguation?: string };
   langlinks?: { lang: string; title: string }[];
 }
 
-async function wikiSearch(lang: "ru" | "en", query: string, limit = 3): Promise<Doc[]> {
-  if (!query.trim()) return [];
-  const base = `https://${lang}.wikipedia.org/w/api.php`;
-  const found = await getJson<{ query?: { search?: { title: string }[] } }>(
-    `${base}?${new URLSearchParams({ action: "query", list: "search", srsearch: query, srlimit: String(limit), format: "json", formatversion: "2" })}`,
-  );
-  if (found === null) throw new SourcesUnavailableError();
-  const titles = (found.query?.search ?? []).map((x) => x.title);
-  if (titles.length === 0) return [];
-
-  const data = await getJson<{ query?: { pages?: WikiApiPage[] } }>(
-    `${base}?${new URLSearchParams({
-      action: "query",
-      titles: titles.join("|"),
-      prop: "extracts|langlinks",
-      explaintext: "1",
-      exlimit: "max",
-      exchars: "6000",
-      lllang: "en",
-      lllimit: "max",
-      format: "json",
-      formatversion: "2",
-    })}`,
-  );
-  const pages = data?.query?.pages ?? [];
-  return titles
-    .map((title) => pages.find((pg) => pg.title === title))
-    .filter((pg): pg is WikiApiPage => !!pg)
+function toWikiDocs(lang: "ru" | "en", pages: WikiApiPage[]): Doc[] {
+  return pages
+    .filter((pg) => !pg.missing && !pg.pageprops?.disambiguation)
     .map((pg) => ({
       kind: "wikipedia" as const,
       title: `${pg.title} (Wikipedia ${lang.toUpperCase()})`,
@@ -159,6 +171,65 @@ async function wikiSearch(lang: "ru" | "en", query: string, limit = 3): Promise<
       text: `${pg.title}. ${pg.extract ?? ""}`,
       englishTitle: lang === "en" ? pg.title : pg.langlinks?.find((l) => l.lang === "en")?.title,
     }));
+}
+
+const WIKI_PAGE_FIELDS = {
+  prop: "extracts|langlinks|pageprops",
+  ppprop: "disambiguation",
+  explaintext: "1",
+  exlimit: "max",
+  exchars: "6000",
+  lllang: "en",
+  lllimit: "max",
+  format: "json",
+  formatversion: "2",
+};
+
+/** One request: full-text search and the page extracts together. */
+async function wikiSearch(lang: "ru" | "en", query: string, limit = 3): Promise<Doc[]> {
+  if (!query.trim()) return [];
+  const data = await getJson<{ query?: { pages?: WikiApiPage[] } }>(
+    `https://${lang}.wikipedia.org/w/api.php?${new URLSearchParams({
+      action: "query",
+      generator: "search",
+      gsrsearch: query,
+      gsrlimit: String(limit),
+      ...WIKI_PAGE_FIELDS,
+    })}`,
+  );
+  if (data === null) throw new SourcesUnavailableError();
+  return toWikiDocs(lang, [...(data.query?.pages ?? [])].sort((x, y) => (x.index ?? 0) - (y.index ?? 0)));
+}
+
+/** One request for many exact titles (redirects followed); the key is the title as asked. */
+async function wikiByTitles(lang: "ru" | "en", titles: string[]): Promise<Map<string, Doc>> {
+  const asked = Array.from(new Set(titles.map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t.length >= 3 && t.length <= 200)));
+  const found = new Map<string, Doc>();
+  if (asked.length === 0) return found;
+  const data = await getJson<{
+    query?: {
+      normalized?: { from: string; to: string }[];
+      redirects?: { from: string; to: string }[];
+      pages?: WikiApiPage[];
+    };
+  }>(
+    `https://${lang}.wikipedia.org/w/api.php?${new URLSearchParams({
+      action: "query",
+      titles: asked.join("|"),
+      redirects: "1",
+      ...WIKI_PAGE_FIELDS,
+    })}`,
+  );
+  if (data === null) return found;
+  const docs = new Map(toWikiDocs(lang, data.query?.pages ?? []).map((d) => [d.rawTitle, d]));
+  for (const from of asked) {
+    let title = from;
+    title = data.query?.normalized?.find((n) => n.from === title)?.to ?? title;
+    title = data.query?.redirects?.find((n) => n.from === title)?.to ?? title;
+    const doc = docs.get(title);
+    if (doc) found.set(from, doc);
+  }
+  return found;
 }
 
 function xmlText(fragment: string): string {
@@ -283,12 +354,30 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
   const questionQuery = keywords(question, 5);
   if (!questionQuery || questionStems.length === 0) return Response.json({ error: "no_answer" }, { status: 404 });
 
-  const [questionDocs, ...optionDocLists] = await Promise.all([
-    wikiSearch(lang, questionQuery, 4),
-    ...options.map((o) => wikiSearch(lang, o.text, 2).catch(() => [] as Doc[])),
-  ]);
+  // Generic words ("какой", "нерв") drag searches toward broad overview pages; the longest words carry the topic.
+  const topicQuery = Array.from(new Set(question.match(/[a-zа-яё]{6,}/gi) ?? []))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 2)
+    .join(" ");
 
-  const ownDocs = options.map((o, i) => optionDocLists[i]?.map((d) => matchesOption(o.text, d)).find(Boolean));
+  const [mainDocs, topicDocs, byTitle] = await Promise.all([
+    wikiSearch(lang, questionQuery, 4),
+    topicQuery && topicQuery !== questionQuery ? wikiSearch(lang, topicQuery, 3).catch(() => [] as Doc[]) : Promise.resolve([] as Doc[]),
+    wikiByTitles(lang, options.map((o) => o.text)),
+  ]);
+  const seenTitles = new Set<string>();
+  const questionDocs = [...mainDocs, ...topicDocs].filter((d) => (seenTitles.has(d.rawTitle) ? false : (seenTitles.add(d.rawTitle), true)));
+
+  const normalizedTitle = (text: string) => text.replace(/\s+/g, " ").trim();
+  const ownDocs: (Doc | undefined)[] = options.map((o) => byTitle.get(normalizedTitle(o.text)));
+  // Options that are not an exact article title (inflected forms, longer phrases) fall back to a search; capped to stay polite.
+  const unresolved = options.map((o, i) => i).filter((i) => !ownDocs[i]).slice(0, 3);
+  await Promise.all(
+    unresolved.map(async (i) => {
+      const found = await wikiSearch(lang, options[i].text, 2).catch(() => [] as Doc[]);
+      ownDocs[i] = found.map((d) => matchesOption(options[i].text, d)).find(Boolean);
+    }),
+  );
   const questionStemSet = new Set(questionStems);
   const topicDoc = questionDocs
     .filter((d) => d.englishTitle)
@@ -419,7 +508,7 @@ async function openLookup(question: string): Promise<Response> {
     keys: [],
     answerText: best.doc.rawTitle,
     explanation: ru
-      ? `Термин найден ${best.searches} из 3 независимых поисков по Википедии${scientific.length > 0 ? " и подтверждён публикациями PubMed" : ""}. Ответ подобран автоматически, без ИИ — проверьте формули��овку по ссылкам.`
+      ? `Термин найден ${best.searches} из 3 независимых поисков по Википедии${scientific.length > 0 ? " и подтверждён публикациями PubMed" : ""}. Ответ подобран автоматически, без ИИ ��� проверьте формули��овку по ссылкам.`
       : `The term was found by ${best.searches} of 3 independent Wikipedia searches${scientific.length > 0 ? " and confirmed by PubMed" : ""}. Picked automatically, without AI — please verify via the links.`,
     confidence: confirmations >= 4 ? "high" : confirmations === 3 ? "medium" : "low",
     mode: "free",
@@ -434,7 +523,9 @@ export async function POST(req: Request) {
   }
   const { question, options } = parsed.data;
   try {
-    return options.length > 0 ? await choiceLookup(question, options) : await openLookup(question);
+    return await budget.run({ deadline: Date.now() + REQUEST_BUDGET_MS }, () =>
+      options.length > 0 ? choiceLookup(question, options) : openLookup(question),
+    );
   } catch (err) {
     if (err instanceof SourcesUnavailableError) {
       return Response.json({ error: "sources_unavailable" }, { status: 503 });

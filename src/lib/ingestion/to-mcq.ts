@@ -15,6 +15,7 @@ import {
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 import { stripScoreNoise } from "./noise";
+import { isHeadingStem } from "./repair";
 
 export { stripScoreNoise };
 
@@ -212,7 +213,8 @@ export function buildQuestions(all: QuestionInstance[]): { questions: MCQQuestio
   const questions = dropFilledCopies(
     ordered
       .map((c, i) => canonicalToMcq(c, i, byId))
-      .filter((q) => !(q.tags?.includes("unreadable") && q.status === "missing_answer")),
+      .filter((q) => !(q.tags?.includes("unreadable") && q.status === "missing_answer"))
+      .filter((q) => !(Object.keys(q.options).length === 0 && q.status === "missing_answer" && isHeadingStem(q.question))),
   );
   return { questions, totalFound: instances.length };
 }

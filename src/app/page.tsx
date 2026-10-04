@@ -164,27 +164,34 @@ export default function Home() {
       persistQuestions(next);
     };
 
+    const inFlight = new Set<string>();
+    const worker = async () => {
+      while (!unmountedRef.current && !autoBlockedRef.current) {
+        const target = latestBankRef.current.find((q) => isTarget(q) && !inFlight.has(q.id));
+        if (!target) break;
+        inFlight.add(target.id);
+        try {
+          commit(await lookupAiAnswer(target));
+          found++;
+        } catch (err) {
+          if (err instanceof NoAnswerError) {
+            commit({ ...target, aiTried: true });
+          } else if (err instanceof AiRateLimitError || err instanceof AiBillingError) {
+            autoBlockedRef.current = true;
+          } else {
+            autoFailedRef.current.add(target.id);
+          }
+        } finally {
+          inFlight.delete(target.id);
+        }
+        done++;
+        setAutoProgress({ done, total: Math.max(total, done) });
+      }
+    };
+
     (async () => {
       try {
-        while (!unmountedRef.current) {
-          const target = latestBankRef.current.find(isTarget);
-          if (!target) break;
-          try {
-            commit(await lookupAiAnswer(target));
-            found++;
-          } catch (err) {
-            if (err instanceof NoAnswerError) {
-              commit({ ...target, aiTried: true });
-            } else if (err instanceof AiRateLimitError || err instanceof AiBillingError) {
-              autoBlockedRef.current = true;
-              break;
-            } else {
-              autoFailedRef.current.add(target.id);
-            }
-          }
-          done++;
-          setAutoProgress({ done, total: Math.max(total, done) });
-        }
+        await Promise.all(Array.from({ length: 3 }, worker));
       } finally {
         autoRunningRef.current = false;
         if (!unmountedRef.current) {
@@ -214,7 +221,7 @@ export default function Home() {
 
     setProgress({
       step: "analyzing",
-      message: "Analyzing PDF document structure...",
+      message: t("progAnalyzing"),
       percent: 15,
     });
 
@@ -232,7 +239,7 @@ export default function Home() {
       // Client-side extraction handles files up to 150MB in browser without 413 error
       setProgress({
         step: "extracting",
-        message: "Reading PDF pages in browser memory...",
+        message: t("progReading"),
         percent: 25,
       });
 
@@ -240,7 +247,7 @@ export default function Home() {
       // pdf.js transfers (detaches) the buffer it receives, so keep a copy for the engine fallback.
       const engineBytes = arrayBuffer.slice(0);
       const runEngine = async () => {
-        setProgress({ step: "detecting_questions", message: "Running universal engine (Moodle / LMS / Cyrillic)...", percent: 88 });
+        setProgress({ step: "detecting_questions", message: t("progEngine"), percent: 88 });
         const { extractWithEngine } = await import("@/lib/ingestion/to-mcq");
         return extractWithEngine(engineBytes, { ocr: options.useOcr === "force" ? "force" : "auto" });
       };
@@ -257,7 +264,7 @@ export default function Home() {
         (curr, total, msg) => {
           setProgress({
             step: options.useOcr === "force" ? "ocr" : "extracting",
-            message: msg || `Extracting page ${curr} of ${total}...`,
+            message: options.useOcr === "force" ? t("progOcrPage", { n: curr, total }) : t("progPage", { n: curr, total }),
             percent: Math.min(85, Math.round(25 + (curr / total) * 60)),
           });
         },
@@ -265,7 +272,8 @@ export default function Home() {
       );
 
       if (!clientRes.success) {
-        const legacyError = clientRes.error || "Failed to extract text from PDF.";
+        console.warn("Legacy parser error:", clientRes.error);
+        const legacyError = t("errExtractFail");
         const engineRes = await runEngine().catch((e) => {
           console.error("Engine fallback failed:", e);
           return null;
@@ -282,7 +290,7 @@ export default function Home() {
       if (options.useAi && (options.apiKey || process.env.NEXT_PUBLIC_HAS_AI)) {
         setProgress({
           step: "detecting_answers",
-          message: "Enhancing question detection with AI...",
+          message: t("progAi"),
           percent: 85,
         });
 
@@ -316,7 +324,7 @@ export default function Home() {
       if (extractedQuestions.length === 0) {
         setProgress({
           step: "detecting_questions",
-          message: "Isolating questions, options, and answers...",
+          message: t("progIsolating"),
           percent: 90,
         });
 
@@ -342,7 +350,7 @@ export default function Home() {
 
       setProgress({
         step: "completed",
-        message: "MCQ extraction completed successfully!",
+        message: t("progCompleted"),
         percent: 100,
       });
 
@@ -393,7 +401,7 @@ export default function Home() {
       }
     } catch (err: unknown) {
       console.error("Extraction failed:", err);
-      const msg = err instanceof Error ? err.message : "Failed to process PDF document.";
+      const msg = t("errProcess");
       setError(msg);
       setProgress({ step: "error", message: msg, percent: 0 });
       showToast(t("toastError"), msg, "error");
@@ -727,10 +735,10 @@ export default function Home() {
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
-                  SVG Vector Studio &amp; Layout Engine
+                  {t("svgStudioT")}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Select a question below to preview and export semantic vector SVG graphics
+                  {t("svgStudioD")}
                 </p>
               </div>
             </div>
@@ -739,16 +747,16 @@ export default function Home() {
               <div className="p-12 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                 <Sparkles className="w-10 h-10 text-amber-500 mx-auto mb-3" />
                 <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                  No Questions Available
+                  {t("svgNoneT")}
                 </h4>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Extract a PDF document or import CSV to start designing SVGs.
+                  {t("svgNoneD")}
                 </p>
                 <button
                   onClick={() => setActiveTab("upload")}
                   className="mt-4 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
                 >
-                  Upload PDF Now
+                  {t("svgUploadNow")}
                 </button>
               </div>
             ) : (
@@ -760,7 +768,7 @@ export default function Home() {
                     className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 cursor-pointer transition-all shadow-2xs hover:shadow-xs"
                   >
                     <div className="flex items-center justify-between text-xs font-bold mb-2">
-                      <span className="text-blue-600">Question #{q.questionNumber}</span>
+                      <span className="text-blue-600">{t("svgQ", { n: q.questionNumber })}</span>
                       <span className="text-amber-500 flex items-center gap-1">
                         <Sparkles className="w-3.5 h-3.5" /> SVG
                       </span>
@@ -769,7 +777,7 @@ export default function Home() {
                       {q.question.text}
                     </p>
                     <div className="mt-2 text-[10px] text-slate-400">
-                      Answer: {q.answer?.key || "None"} • {q.options.length} Options
+                      {t("svgAns", { a: q.answer?.key || t("svgNoAns"), n: q.options.length })}
                     </div>
                   </div>
                 ))}

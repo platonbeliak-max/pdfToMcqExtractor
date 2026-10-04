@@ -15,6 +15,7 @@ import { buildLines, detectRunningNoise } from "./layout";
 import { classifyLine } from "./classify";
 import { segment } from "./segment";
 import { buildInstance } from "./instance";
+import { repairSequence } from "./repair";
 import { applyGlyphMeanings, determineAnswer, learnGlyphMeanings } from "./answer";
 import { adapterFor, detectSubject, questionSubjectHints } from "./subjects";
 
@@ -226,6 +227,12 @@ export function analyzeDocument(pagesIn: PageInput[], opts: AnalyzeOptions): Doc
         return buildInstance(b, { documentId: opts.documentId, attemptId: att.id, attemptStartPage: att.startPage, sequence: i + 1, pageImages });
       }),
     (r) => `${r.length} вопросов`,
+  );
+
+  instances = stage(
+    "SEQUENCE_REPAIR",
+    () => repairSequence(instances),
+    (r) => `${r.length} вопросов после склейки страниц`,
   );
 
   const glyphs = stage("MARK_DETECTION", () => learnGlyphMeanings(instances), (r) => `${r.size} значков распознано по баллам`);
