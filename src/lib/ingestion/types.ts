@@ -35,8 +35,16 @@ export interface RawImageRegion {
   bbox: BBox;
 }
 
+/** A mark the reader added on top of the PDF (stamp, typed note, freehand drawing). */
+export interface PageAnnotation {
+  kind: "STAMP" | "FREETEXT" | "INK" | "SQUARE" | "OTHER";
+  bbox: BBox;
+  text: string;
+}
+
 export interface PageInput {
   pageNumber: number;
+  annotations?: PageAnnotation[];
   width: number;
   height: number;
   source: TextSource;

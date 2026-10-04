@@ -5,6 +5,8 @@ import { cleanDisplayText, unionBBox } from "./text";
 const SIDE_META_RE =
   /^(?:вопрос|question|задание|питання|frage|pregunta)\s*№?\s*\d{1,4}$|^(?:верно|неверно|частично\s+правильный|частично\s+верно|нет\s+ответа|correct|incorrect|partially\s+correct|not\s+answered|отметить\s+вопрос|flag\s+question|не\s+завершено|выполнен)$|^(?:баллов|балл|баллы|mark|marks|points?)\s*:?\s*[\d.,]+\s*(?:из|out\s+of|of|\/)\s*[\d.,]+$/i;
 
+const SCORE_TAIL_RE = /^-?\d{1,3}(?:[.,]\d{1,2})?$/;
+
 function median(values: number[]): number {
   if (values.length === 0) return 0;
   const s = [...values].sort((a, b) => a - b);
@@ -110,7 +112,10 @@ export function buildLines(page: PageInput): LayoutLine[] {
     const conf = confs.reduce((a, b) => a + b, 0) / confs.length;
     const bbox = unionBBox(wl.items.map((i) => ({ x: i.x, y: i.y, w: i.w, h: i.h })))!;
 
-    if (cells.length >= 2 && SIDE_META_RE.test(cells[0].text)) {
+    // Moodle wraps "Баллов: 1,00 из 1,00" so the last "1,00" lands beside the first option and would glue it to the stem.
+    const wrappedScore =
+      cells.length >= 2 && SCORE_TAIL_RE.test(cells[0].text) && cells[0].bbox.w < 30 && cells[1].bbox.x - (cells[0].bbox.x + cells[0].bbox.w) > 40;
+    if (cells.length >= 2 && (wrappedScore || SIDE_META_RE.test(cells[0].text))) {
       push(cells[0].text, cells[0].bbox, [cells[0]], conf);
       const rest = cells.slice(1);
       push(
