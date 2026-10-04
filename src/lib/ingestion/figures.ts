@@ -38,7 +38,7 @@ interface Tok {
 }
 
 const LABEL_NUM_RE = /^(\d{1,2})[.)]$/;
-const STOP_RE = /^(?:[□■●○◯▢◻◼]+|https?:|Отметить|Flag|Информация|Information|Навигация|Navigation|Тест|Начало|Завершен|Затраченное|Оценка|Отзыв)/i;
+const STOP_RE = /^(?:[□■●○◯▢◻◼◀▶◄►]+|https?:|Отметить|Flag|Информация|Information|Навигация|Navigation|Тест|Начало|Завершен|Затраченное|Оценка|Отзыв|Обучающий|Контролирующий|Перейти|Входной|Итоговый)/i;
 const HEADER_RE = /^(?:Вопрос|Question)$/i;
 
 function cleanWord(s: string): string {
@@ -195,7 +195,11 @@ export function detectFigures(pages: PageInput[]): FigureDraft[] {
         j = h.end - 1;
         continue;
       }
+      // Field boxes surface as tokens holding only spaces or zero-width characters.
+      if (!/[\p{L}\p{N}]/u.test(t.s) && !STOP_RE.test(t.s)) continue;
       if (STOP_RE.test(t.s)) break;
+      // Label text always sits to the right of its number; a word back at the left margin starts the next question's stem.
+      if (cur.words.length && t.s.trim() && !/^\d{1,2}[.)]?$/.test(t.s.trim()) && t.x < start.x - 1) break;
       // Answer fields are drawn as tall boxes, so consecutive lines of one label can be ~4 text heights apart.
       const sameBlock = t.page !== prevTok.page || t.y - prevTok.y < Math.max(prevTok.h, t.h) * 5.5;
       if (cur.words.length && !sameBlock) break;
@@ -397,6 +401,10 @@ export function figureNoise(drafts: FigureDraft[]): (q: { question: string; opti
     const text = q.question;
     if (OCR_PROMPT_RE.test(text)) return true;
     if ((text.match(/(?:^|\s)\d{1,2}[.)]\s/g) ?? []).length >= 2) return true;
+    // A stem cut off at a bare list number ("…отверстие рта 1.") is a label list read as a question.
+    if (/(?:^|\s)\d{1,2}[.)]?\s*$/.test(text) && /^[^?]*\p{L}/u.test(text)) return true;
+    const numberedOptions = Object.values(q.options).filter((o) => /\s\d{1,2}[.)]\s/.test(o)).length;
+    if (numberedOptions >= 1 && Object.keys(q.options).length >= 2 && /^(?:Назовите|Укажите|Подпишите|Обозначьте|Определите)/i.test(text)) return true;
     const words = text.toLowerCase().replace(/ё/g, "е").split(/[^\p{L}]+/u).filter((w) => w.length >= 4);
     if (!words.length) return true;
     return words.filter((w) => vocab.has(w)).length / words.length >= 0.6;

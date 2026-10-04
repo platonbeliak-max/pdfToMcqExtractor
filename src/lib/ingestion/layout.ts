@@ -154,7 +154,9 @@ export function detectRunningNoise(pages: { lines: LayoutLine[]; height: number 
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
-  const threshold = Math.max(3, Math.ceil(pages.length * 0.3));
+  // Merged exports mix attempts with and without a header, so the share of pages cannot be
+  // required to grow with document size: a handful of repeats in the page margin is enough.
+  const threshold = Math.max(3, Math.min(Math.ceil(pages.length * 0.3), 6));
   for (const [k, c] of counts) if (c >= threshold) noise.add(k);
   return noise;
 }

@@ -34,6 +34,7 @@ const RE = {
   pageCounter: /^(?:страница|стр\.|page|p\.)\s*\d+\s*(?:из|of|\/)\s*\d+$|^\d+\s*(?:из|of|\/)\s*\d+$|^-?\s*\d{1,4}\s*-?$/i,
   url: /^(?:https?:\/\/|www\.)\S+$/i,
   timestamp: /^\d{1,2}[./]\d{1,2}[./]\d{2,4}(?:,?\s+\d{1,2}:\d{2}(?::\d{2})?)?(?:\s*[AP]M)?$/i,
+  lmsPrintHeader: /(?:просмотр\s+попытки|review\s+of\s+attempt|attempt\s+review)\s*:?\s*https?:\/\/|\/mod\/quiz\/review\.php\?|^\S.*\s+https?:\/\/\S+\.{3}$/i,
   navNoise:
     /^(?:закончить\s+обзор|finish\s+review|навигация\s+по\s+тесту|quiz\s+navigation|показать\s+одну\s+страницу|show\s+one\s+page|перейти\s+к|jump\s+to|следующая\s+страница|next\s+page|предыдущая\s+страница|previous\s+page)(?![а-яёa-z])/i,
 };
@@ -129,9 +130,12 @@ export function classifyLine(line: LayoutLine, ctx: ClassifyContext): Classified
   const with_ = (role: LineRole, meta?: Record<string, unknown>): ClassifiedLine => ({ ...line, role, meta });
 
   if (!t) return with_("NOISE", { reason: "empty" });
-  if (ctx.runningNoise.has(noiseKey(t))) return with_("NOISE", { reason: "running-header-footer" });
+  const structural =
+    RE.headerStrong.test(t) || RE.headerInline.test(t) || RE.status.test(t) || RE.score.test(t) || isInstruction(t).ok || parseOptionLine(t) !== null;
+  if (!structural && ctx.runningNoise.has(noiseKey(t))) return with_("NOISE", { reason: "running-header-footer" });
+  if (RE.lmsPrintHeader.test(t)) return with_("NOISE", { reason: "page-chrome" });
   const isChrome = (s: string) =>
-    RE.pageCounter.test(s) || RE.url.test(s) || RE.timestamp.test(s) || RE.navNoise.test(s);
+    RE.pageCounter.test(s) || RE.url.test(s) || RE.timestamp.test(s) || RE.navNoise.test(s) || RE.lmsPrintHeader.test(s);
   if (isChrome(t)) return with_("NOISE", { reason: "page-chrome" });
   // Print footers often combine URL + page counter + date on one baseline.
   const parts = (line.cells && line.cells.length > 1 ? line.cells.map((c) => c.text) : t.split(/\s{2,}|\s+(?=https?:\/\/)|(?<=\S)\s+(?=\d+\s*(?:из|of|\/)\s*\d+$)/))
