@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import useSWR from "swr";
 import { StructuredQuestion, answerKeys, isFigureQuestion, type MatchingAnswer, type SequenceAnswer } from "@/types/question";
 import { useT } from "@/lib/i18n";
-import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
 
@@ -153,19 +152,6 @@ function textMatches(typed: string, expected: string): boolean {
   return editDistance(a, b) <= Math.floor(b.length / 6);
 }
 
-const BUILT_IN_BANKS = [
-  { id: "anatomy", label: "bankAnatomy" },
-  { id: "physiology", label: "bankPhysiology" },
-] as const;
-
-type Source = "mine" | (typeof BUILT_IN_BANKS)[number]["id"];
-
-const fetchBank = async (url: string): Promise<StructuredQuestion[]> => {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return ((await res.json()) as { questions: StructuredQuestion[] }).questions;
-};
-
 export function TestView({
   questions,
   onGoUpload,
@@ -175,66 +161,7 @@ export function TestView({
   onGoUpload: () => void;
   initialMode?: TestMode;
 }) {
-  const { t } = useT();
-  const [source, setSource] = useState<Source>(() => (questions.some(hasAnswer) ? "mine" : "anatomy"));
-  const bank = useSWR(source === "mine" ? null : `/banks/${source}.json`, fetchBank, { revalidateOnFocus: false });
-
-  const picker = (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t("testSource")}</legend>
-      <div className="flex flex-wrap gap-2">
-        {[
-          { id: "mine" as Source, label: t("testSourceMine", { n: questions.filter(hasAnswer).length }) },
-          ...BUILT_IN_BANKS.map((b) => ({ id: b.id as Source, label: t(b.label) })),
-        ].map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            aria-pressed={source === s.id}
-            onClick={() => setSource(s.id)}
-            className={`px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${
-              source === s.id
-                ? "bg-blue-600 border-blue-600 text-white"
-                : "border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-blue-500"
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-    </fieldset>
-  );
-
-  if (source !== "mine" && !bank.data) {
-    return (
-      <div className="max-w-xl mx-auto p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col gap-6">
-        {picker}
-        {bank.error ? (
-          <div className="flex flex-wrap items-center gap-3 text-sm text-red-700 dark:text-red-400">
-            <span>{t("testSourceError")}</span>
-            <button type="button" onClick={() => void bank.mutate()} className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-800 font-bold">
-              {t("figRetry")}
-            </button>
-          </div>
-        ) : (
-          <p role="status" className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-            <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-            {t("testSourceLoading")}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <TestRunner
-      key={source}
-      questions={source === "mine" ? questions : bank.data!}
-      onGoUpload={onGoUpload}
-      initialMode={initialMode}
-      picker={picker}
-    />
-  );
+  return <TestRunner questions={questions} onGoUpload={onGoUpload} initialMode={initialMode} picker={null} />;
 }
 
 function TestRunner({

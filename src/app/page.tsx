@@ -16,6 +16,8 @@ import { DashboardView } from "@/components/dashboard-view";
 import { QuestionBankView } from "@/components/question-bank-view";
 import { SvgEditorModal } from "@/components/svg-editor-modal";
 import { TestView } from "@/components/test-view";
+import { BaseSwitcher } from "@/components/base-switcher";
+import { useBuiltInBanks, type BaseId, type BuiltInBankId } from "@/lib/built-in-banks";
 import { useT } from "@/lib/i18n";
 import {
   MCQQuestion,
@@ -59,12 +61,29 @@ import { lookupAiAnswer, NoAnswerError, AiBillingError, AiRateLimitError, LOOKUP
 const STORAGE_KEY = "pdf-mcq-saved-session";
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<PlatformTab>("dashboard");
+  const [activeTab, setActiveTab] = useState<PlatformTab>("bank");
 
   // Persistent Question Bank state
   const [allQuestions, setAllQuestions] = useState<StructuredQuestion[]>([]);
   const [testMode, setTestMode] = useState<TestMode>("all");
   const [allDocuments, setAllDocuments] = useState<DocumentRecord[]>([]);
+
+  // Built-in bases are separate from the user's own uploads and never mixed with them.
+  const banks = useBuiltInBanks();
+  const [base, setBase] = useState<BaseId>("physiology");
+  const [bankEdits, setBankEdits] = useState<Partial<Record<BuiltInBankId, StructuredQuestion[]>>>({});
+  const bankQuestions = (id: BuiltInBankId) => bankEdits[id] ?? banks[id].data ?? null;
+  const baseQuestions = base === "mine" ? allQuestions : (bankQuestions(base) ?? []);
+  const baseReady = base === "mine" || !!bankQuestions(base);
+  const baseCounts: Record<BaseId, number | null> = {
+    physiology: bankQuestions("physiology")?.length ?? null,
+    anatomy: bankQuestions("anatomy")?.length ?? null,
+    mine: allQuestions.length,
+  };
+  const updateBaseQuestions = (updated: StructuredQuestion[]) => {
+    if (base === "mine") handleUpdateBankQuestions(updated);
+    else setBankEdits((e) => ({ ...e, [base]: updated }));
+  };
 
   // Current upload session state
   const [pdfFile, setPdfFile] = useState<File | Blob | null>(null);
@@ -115,10 +134,6 @@ export default function Home() {
         }
       }
 
-      // If bank has questions, start at dashboard; otherwise upload
-      if (savedBank.length === 0 && (!savedSession || JSON.parse(savedSession)?.questions?.length === 0)) {
-        setActiveTab("upload");
-      }
     } catch (e) {
       console.warn("Failed to load initial data:", e);
     }
@@ -381,6 +396,7 @@ export default function Home() {
       const updatedBank = [...structuredItems, ...allQuestions];
       setAllQuestions(updatedBank);
       persistQuestions(updatedBank);
+      if (structuredItems.length) setBase("mine");
 
       localStorage.setItem(
         STORAGE_KEY,
@@ -556,29 +572,51 @@ export default function Home() {
     <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        questionCount={allQuestions.length}
+        questionCount={baseQuestions.length}
         hasExtractedData={currentQuestions.length > 0}
         onReset={handleResetSession}
       />
+      {(activeTab === "dashboard" || activeTab === "bank" || activeTab === "test") && (
+        <BaseSwitcher active={base} onChange={setBase} counts={baseCounts} showMine={allQuestions.length > 0 || base === "mine"} />
+      )}
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        {(activeTab === "dashboard" || activeTab === "bank" || activeTab === "test") && !baseReady ? (
+          <div role="status" className="max-w-xl mx-auto p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+            {banks[base].error ? (
+              <>
+                <span className="text-red-700 dark:text-red-400">{t("baseLoadError")}</span>
+                <button type="button" onClick={() => void banks[base].mutate()} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-bold">
+                  {t("figRetry")}
+                </button>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />
+                {t("testSourceLoading")}
+              </>
+            )}
+          </div>
+        ) : null}
         {/* VIEW A: DASHBOARD VIEW */}
-        {activeTab === "dashboard" && (
+        {activeTab === "dashboard" && baseReady && (
           <DashboardView
-            questions={allQuestions}
-            documents={allDocuments}
+            key={base}
+            questions={baseQuestions}
+            documents={base === "mine" ? allDocuments : []}
             onNavigateTab={setActiveTab}
             onDeleteDocument={handleDeleteDocument}
-            onClearAll={handleClearAll}
+            onClearAll={base === "mine" ? handleClearAll : () => setBankEdits((e) => ({ ...e, [base]: undefined }))}
             onStartTest={handleStartTest}
           />
         )}
 
         {/* VIEW B: QUESTION BANK VIEW */}
-        {activeTab === "bank" && (
+        {activeTab === "bank" && baseReady && (
           <QuestionBankView
-            questions={allQuestions}
-            onUpdateQuestions={handleUpdateBankQuestions}
+            key={base}
+            questions={baseQuestions}
+            onUpdateQuestions={updateBaseQuestions}
             onViewSource={(p) => {
               setActivePdfPage(p);
               setActiveTab("upload");
@@ -728,8 +766,8 @@ export default function Home() {
           </div>
         )}
 
-        {activeTab === "test" && (
-          <TestView key={testMode} questions={allQuestions} initialMode={testMode} onGoUpload={() => setActiveTab("upload")} />
+        {activeTab === "test" && baseReady && (
+          <TestView key={`${base}-${testMode}`} questions={baseQuestions} initialMode={testMode} onGoUpload={() => setActiveTab("upload")} />
         )}
 
         {/* VIEW D: SVG STUDIO STANDALONE TAB */}

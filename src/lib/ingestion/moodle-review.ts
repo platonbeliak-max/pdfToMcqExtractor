@@ -144,7 +144,9 @@ const STATE_RE = /^(?:Верно|Неверно|Частично правиль�
 const SCORE_RE = /^Балл(?:ов)?:\s*(-?\d+(?:,\d+)?)\s*(?:из\s*(\d+(?:,\d+)?)?)?$/;
 const MAX_RE = /^(?:из\s*)?(\d+(?:,\d+)?)$/;
 const MAX_ONLY_RE = /^Макс(?:\.|имальный)?\s*балл:?\s*(\d+(?:,\d+)?)$/i;
-const META_RE = /^(?:Тест начат|Состояние|Завершен|Прошло\s*времени|Оценка|Баллы\s+\d|В начало|Мои курсы)/;
+// Attempt-summary rows only: stems like «Состояние клетки…» or «Оценка вариабельности…» must not match.
+const META_RE =
+  /^(?:Тест начат|Состояние(?:\s+Заверш\p{L}*)?$|Завершен(?:ные|о)?(?:\s+\p{Lu}\p{L}*,.*)?$|Прошло\s*времени|Оценка(?:\s+\d.*)?$|Баллы\s+\d|В начало|Мои курсы)/u;
 const INSTRUCTION_RE = /^Выберите\s+(?:один|одно|несколько)(?=\s)[^:]*(?:ответ|вариант)\S*:?$/iu;
 const FEEDBACK_RE = /^⟪?\s*Правильн(?:ый|ые) ответ(?:ы)?\s*:?\s*(.*?)\s*⟫?$/i;
 const VERDICT_RE = /^(?:Ваш ответ (?:верный|неправильный|частично правильный)|Отзыв)\.?$/i;
@@ -648,6 +650,29 @@ function solveRemaining(values: string[], entries: Entry[], known: (string | nul
   return out;
 }
 
+/**
+ * Moodle grades a multiple-answer attempt as (right picks)/(correct count) − (wrong picks)/(wrong count).
+ * Enumerates every answer key compatible with the visible marks and the printed score; returns it when unique.
+ */
+function solveByScore(q: Instance, p: Parsed): Set<number> | null {
+  const n = q.options.length;
+  if (n < 2 || n > 10 || !q.max || q.earned === null || q.earned <= 1e-6 || isFull(q)) return null;
+  const target = q.earned / q.max;
+  const found: number[] = [];
+  for (let mask = 1; mask < 1 << n; mask++) {
+    const isKey = (i: number) => !!(mask & (1 << i));
+    if ([...p.correct].some((i) => !isKey(i)) || [...p.incorrect].some((i) => isKey(i))) continue;
+    const k = q.options.filter((_, i) => isKey(i)).length;
+    const right = [...p.selected].filter(isKey).length;
+    const wrong = p.selected.size - right;
+    const grade = k === n ? right / k : Math.max(0, right / k - wrong / (n - k));
+    if (Math.abs(grade - target) < 0.006) found.push(mask);
+    if (found.length > 1) return null;
+  }
+  if (found.length !== 1) return null;
+  return new Set(q.options.map((_, i) => i).filter((i) => found[0] & (1 << i)));
+}
+
 function interpret(q: Instance): Parsed {
   const base = { inst: q, correct: new Set<number>(), incorrect: new Set<number>(), selected: new Set<number>(), complete: false, order: [], pairs: [], text: null, wrongTexts: [] as string[], entries: [] as Entry[], options: [] as string[] };
   if (q.options.length) {
@@ -685,9 +710,22 @@ function interpret(q: Instance): Parsed {
       if (stamps && !badSelected) p.complete = true;
       else if (q.earned && q.max && okSelected && !badSelected) {
         const k = Math.round((okSelected * q.max) / q.earned);
+        const unselected = q.options.map((o, i) => (o.selected ? -1 : i)).filter((i) => i >= 0);
         if (k === p.correct.size) p.complete = true;
+        // e.g. 4 ticked-correct for 0,80 → 5 correct in total; if that equals ticked + unticked, every unticked option is correct too.
+        else if (k > p.correct.size && k - okSelected === unselected.length) {
+          for (const i of unselected) p.correct.add(i);
+          p.complete = true;
+        }
       }
       if (stamps && badSelected) p.complete = true;
+      if (!p.complete) {
+        const key = solveByScore(q, p);
+        if (key) {
+          p.correct = key;
+          p.complete = true;
+        }
+      }
     }
     if (p.complete && single) for (let i = 0; i < p.options.length; i++) if (!p.correct.has(i)) p.incorrect.add(i);
     return p;
@@ -1076,6 +1114,21 @@ function adoptUnboxedAttempts(groups: Map<string, Group>) {
   }
 }
 
+/**
+ * An attempt printed without its picture (cropped page, image not rendered) is the same question as the
+ * pictured one with identical text and options — join them when that pictured variant is unambiguous.
+ */
+function mergePictureless(groups: Map<string, Group>) {
+  const textKey = (k: string) => k.slice(0, k.lastIndexOf("|"));
+  for (const [key, g] of [...groups]) {
+    if (!key.endsWith("|")) continue;
+    const twins = [...groups.values()].filter((o) => o !== g && !o.key.endsWith("|") && textKey(o.key) === textKey(key));
+    if (twins.length !== 1) continue;
+    twins[0].items.push(...g.items);
+    groups.delete(key);
+  }
+}
+
 export interface MoodleReviewResult {
   questions: MCQQuestion[];
   totalFound: number;
@@ -1101,9 +1154,10 @@ export function parseMoodleReview(pages: PageInput[], renders: Map<string, Figur
     else groups.set(k, { key: k, first: p, items: [p], imageId: pics[0]?.imageId });
   }
   adoptUnboxedAttempts(groups);
+  mergePictureless(groups);
   const questions = [...groups.values()].map((g, i) => ({ ...resolveGroup(g, i), ...(g.imageId ? { imageId: g.imageId } : {}) }));
   return { questions, totalFound: parsed.length, pagesUsed: new Set(instances.flatMap((q) => q.rows.map((r) => r.page))) };
 }
 
 /** Exposed for the audit scripts. */
-export const __internals = { readInstances, interpret, annotate, rowsOf, sideColumnCut, attachFigures, parseStructured };
+export const __internals = { solveByScore, readInstances, interpret, annotate, rowsOf, sideColumnCut, attachFigures, parseStructured };
