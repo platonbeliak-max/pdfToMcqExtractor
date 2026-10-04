@@ -100,6 +100,11 @@ function cleanAnswer(text: string | undefined): string | undefined {
   return cleaned || undefined;
 }
 
+/** Drops a second label glued to the text ("a. e.На границе…" → "На границе…"). */
+function cleanOption(text: string): string {
+  return stripScoreNoise(text).replace(/^[a-eA-E][.)](?=[А-ЯЁ])/, "").trim();
+}
+
 function cleanStem(text: string): string {
   return stripScoreNoise(text).replace(TRAILING_ANSWER_LABEL_RE, "").trim();
 }
@@ -143,9 +148,17 @@ function canonicalToMcq(c: CanonicalQuestionDraft, index: number, byId: Map<stri
   const keyByCanonicalKey = new Map<string, string>();
   c.options.forEach((o, i) => {
     const key = LETTERS[i] ?? String(i + 1);
-    options[key] = stripScoreNoise(o.text);
+    options[key] = cleanOption(o.text);
     keyByCanonicalKey.set(o.key, key);
   });
+  // A true/false question whose other choice was swallowed as a status word keeps both choices.
+  const onlyOption = Object.values(options);
+  if (onlyOption.length === 1 && /^(?:верно|неверно)$/i.test(onlyOption[0])) {
+    const isTrue = onlyOption[0].toLowerCase() === "верно";
+    const ownKey = Object.keys(options)[0];
+    options[ownKey] = isTrue ? "Верно" : "Неверно";
+    options[ownKey === "A" ? "B" : "A"] = isTrue ? "Неверно" : "Верно";
+  }
 
   const correctKeys = c.correctKeys
     .map((k) => keyByCanonicalKey.get(k))

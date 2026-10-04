@@ -331,6 +331,38 @@ export async function renderRegion(
   }
 }
 
+/**
+ * Text layer + vector controls + image regions of one page, without OCR. Shared by the
+ * browser extractor and the Node audit script so both see identical page inputs.
+ */
+export async function readPageStructure(pdfjs: PdfJs, page: PdfPage, pageNumber: number, readErrors: string[]): Promise<PageInput> {
+  const vp = page.getViewport({ scale: 1 });
+  const [text, graphics] = await Promise.all([
+    readTextLayer(page, vp.height).catch((e) => {
+      readErrors.push(`text: ${e instanceof Error ? e.message : e}`);
+      return [] as RawTextItem[];
+    }),
+    readGraphics(pdfjs, page, vp.height).catch((e) => {
+      readErrors.push(`images: ${e instanceof Error ? e.message : e}`);
+      return { images: [] as RawImageRegion[], shapes: [] as Shape[] };
+    }),
+  ]);
+  const textLayerChars = text.reduce((s, i) => s + i.str.replace(/\s/g, "").length, 0);
+  let controls: RawTextItem[] = [];
+  try {
+    controls = controlsToItems(graphics.shapes, text);
+  } catch (e) {
+    readErrors.push(`controls: ${e instanceof Error ? e.message : e}`);
+  }
+  let marked = text;
+  try {
+    marked = markAnswerFields(graphics.shapes, text);
+  } catch (e) {
+    readErrors.push(`fields: ${e instanceof Error ? e.message : e}`);
+  }
+  return { pageNumber, width: vp.width, height: vp.height, source: "TEXT_LAYER", items: [...controls, ...marked], images: graphics.images, textLayerChars };
+}
+
 export interface ExtractOptions {
   ocrLang?: string;
   /** "auto" runs OCR only on pages with an empty text layer. */
@@ -358,32 +390,8 @@ export async function* extractPages(doc: PdfDoc, opts: ExtractOptions = {}): Asy
       let result: PageInput;
       try {
         page = await doc.getPage(n);
-        const vp = page.getViewport({ scale: 1 });
-        const [text, graphics] = await Promise.all([
-          readTextLayer(page, vp.height).catch((e) => {
-            readErrors.push(`text: ${e instanceof Error ? e.message : e}`);
-            return [] as RawTextItem[];
-          }),
-          readGraphics(pdfjs, page, vp.height).catch((e) => {
-            readErrors.push(`images: ${e instanceof Error ? e.message : e}`);
-            return { images: [] as RawImageRegion[], shapes: [] as Shape[] };
-          }),
-        ]);
-        const images = graphics.images;
-        const textLayerChars = text.reduce((s, i) => s + i.str.replace(/\s/g, "").length, 0);
-        let controls: RawTextItem[] = [];
-        try {
-          controls = controlsToItems(graphics.shapes, text);
-        } catch (e) {
-          readErrors.push(`controls: ${e instanceof Error ? e.message : e}`);
-        }
-        let marked = text;
-        try {
-          marked = markAnswerFields(graphics.shapes, text);
-        } catch (e) {
-          readErrors.push(`fields: ${e instanceof Error ? e.message : e}`);
-        }
-        result = { pageNumber: n, width: vp.width, height: vp.height, source: "TEXT_LAYER", items: [...controls, ...marked], images, textLayerChars };
+        result = await readPageStructure(pdfjs, page, n, readErrors);
+        const textLayerChars = result.textLayerChars ?? 0;
         if (mode === "force" || (mode === "auto" && textLayerChars < MIN_TEXT_LAYER_CHARS)) {
           try {
             const ocr = await readOcr(page, await getWorker());

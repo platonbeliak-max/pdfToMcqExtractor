@@ -21,6 +21,21 @@ export function isPrivateUseGlyph(ch: string): boolean {
   return cp >= 0xe000 && cp <= 0xf8ff;
 }
 
+const LATIN_TO_CYRILLIC: Record<string, string> = {
+  a: "а", c: "с", e: "е", o: "о", p: "р", x: "х", y: "у",
+  A: "А", B: "В", C: "С", E: "Е", H: "Н", K: "К", M: "М", O: "О", P: "Р", T: "Т", X: "Х",
+};
+
+// A word that mixes Cyrillic with Latin letters is a Cyrillic word typed with look-alikes ("cиалэктомия", "трaхеостомии").
+const MIXED_SCRIPT_WORD = /(?=[\p{L}]*\p{Script=Cyrillic})(?=[\p{L}]*\p{Script=Latin})[\p{L}]+/gu;
+
+function foldLatinLookalikes(word: string): string {
+  const letters = [...word];
+  // Leave real Latin abbreviations next to Cyrillic ("Th", "pH") alone: every Latin letter must have a Cyrillic twin.
+  if (!letters.every((ch) => !/\p{Script=Latin}/u.test(ch) || ch in LATIN_TO_CYRILLIC)) return word;
+  return letters.map((ch) => LATIN_TO_CYRILLIC[ch] ?? ch).join("");
+}
+
 /**
  * Display normalization: keeps math structure (superscripts, subscripts,
  * Greek letters, operators, units). Only whitespace and invisible chars are
@@ -31,6 +46,8 @@ export function cleanDisplayText(s: string): string {
     .replace(/[\u00AD\u200B-\u200D\uFEFF]/g, "")
     // Some PDF fonts map Cyrillic "к" to the Latin kra glyph "ĸ" (U+0138).
     .replace(/\u0138/g, "к")
+    .replace(MIXED_SCRIPT_WORD, foldLatinLookalikes)
+    .replace(/С(?=\d{1,2}\s*[-–]\s*(?:Th|C|L|S|Co)\d)/g, "C")
     .replace(/\u00A0/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\s+([,.;:!?])(\s|$)/g, "$1$2")

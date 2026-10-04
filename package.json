@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "audit": "tsx tests/audit/audit-pdf.mts"
   },
   "dependencies": {
     "@types/jszip": "^3.4.0",
