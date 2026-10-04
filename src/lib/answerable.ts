@@ -10,6 +10,7 @@ export function dedupeKey(q: StructuredQuestion): string {
 /** Single source of truth for "can be tested": overview, bank filter and test all use this. */
 export function hasAnswer(q: StructuredQuestion): boolean {
   if (q.tags?.includes("unreadable") && !q.isEdited) return false;
+  if (q.sequence || q.matching) return true;
   if (q.options.length) return answerKeys(q.answer?.key).some((k) => q.options.some((o) => o.key === k));
   return !!(q.answer?.text || "").trim();
 }

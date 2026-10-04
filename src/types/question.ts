@@ -53,6 +53,8 @@ export interface StructuredQuestion {
   updatedAt: string;
   isEdited?: boolean;
   imageId?: string;
+  sequence?: SequenceAnswer;
+  matching?: MatchingAnswer;
   answerOrigin?: "file" | "ai";
   aiSources?: { title: string; url: string; kind?: "wikipedia" | "pubmed" | "europepmc" }[];
   aiConfidence?: "high" | "medium" | "low";
@@ -89,6 +91,17 @@ export interface MCQQuestion {
   attempts?: number;
   /** Key of a picture saved in the browser image store (labelled-figure questions). */
   imageId?: string;
+  sequence?: SequenceAnswer;
+  matching?: MatchingAnswer;
+}
+
+/** Ordering task: option key → its correct position (1-based). The options themselves stay in the order printed. */
+export type SequenceAnswer = Record<string, number>;
+
+/** Matching task: option key → correct right-hand value, plus every value offered in the drop-down. */
+export interface MatchingAnswer {
+  pairs: Record<string, string>;
+  choices: string[];
 }
 
 /** Splits a stored answer key ("A,C" / "A, C") into individual option keys. */
@@ -275,6 +288,8 @@ export function toStructuredQuestion(
     updatedAt: new Date().toISOString(),
     isEdited: mcq.isEdited,
     imageId: mcq.imageId,
+    sequence: mcq.sequence,
+    matching: mcq.matching,
   };
 }
 
@@ -311,6 +326,8 @@ export function toMCQQuestion(sq: StructuredQuestion): MCQQuestion {
     category: sq.category,
     tags: sq.tags,
     imageId: sq.imageId,
+    sequence: sq.sequence,
+    matching: sq.matching,
   };
 }
 

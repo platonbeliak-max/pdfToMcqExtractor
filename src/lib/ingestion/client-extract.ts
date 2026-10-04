@@ -1,6 +1,6 @@
 "use client";
 
-import type { PageInput, RawImageRegion, RawTextItem } from "./types";
+import type { PageAnnotation, PageInput, RawImageRegion, RawTextItem } from "./types";
 
 /**
  * Reads a PDF in the browser and yields one raw PageInput per page: text items
@@ -286,6 +286,19 @@ function averageHash(source: HTMLCanvasElement): string {
   return hex;
 }
 
+/** 32×32 grayscale at 16 levels (1024 hex chars): tells apart near-identical pictures (e.g. agglutination plates) that share an average hash. */
+function fineFingerprint(source: HTMLCanvasElement): string {
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return "";
+  ctx.drawImage(source, 0, 0, 32, 32);
+  const px = ctx.getImageData(0, 0, 32, 32).data;
+  let out = "";
+  for (let i = 0; i < px.length; i += 4) out += Math.min(15, Math.floor((px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) / 16)).toString(16);
+  return out;
+}
+
 /**
  * Renders part of a page (PDF points, top-left origin) to a JPEG. `masks`
  * are painted over first so captions printed on slides don't give answers away.
@@ -296,7 +309,7 @@ export async function renderRegion(
   bbox: { x: number; y: number; w: number; h: number } | null,
   masks: { x: number; y: number; w: number; h: number }[] = [],
   maxWidth = 1000,
-): Promise<{ blob: Blob; hash: string } | null> {
+): Promise<{ blob: Blob; hash: string; fine: string } | null> {
   const page = await doc.getPage(pageNumber);
   try {
     const base = page.getViewport({ scale: 1 });
@@ -325,9 +338,10 @@ export async function renderRegion(
     crop.getContext("2d")?.drawImage(full, sx, sy, sw, sh, 0, 0, sw, sh);
     full.width = full.height = 0;
     const hash = averageHash(crop);
+    const fine = fineFingerprint(crop);
     const blob = await new Promise<Blob | null>((r) => crop.toBlob(r, "image/jpeg", 0.85));
     crop.width = crop.height = 0;
-    return blob ? { blob, hash } : null;
+    return blob ? { blob, hash, fine } : null;
   } finally {
     page.cleanup();
   }
@@ -362,7 +376,29 @@ export async function readPageStructure(pdfjs: PdfJs, page: PdfPage, pageNumber:
   } catch (e) {
     readErrors.push(`fields: ${e instanceof Error ? e.message : e}`);
   }
-  return { pageNumber, width: vp.width, height: vp.height, source: "TEXT_LAYER", items: [...controls, ...marked], images: graphics.images, textLayerChars };
+  const annotations = await readAnnotations(page, vp.height).catch((e) => {
+    readErrors.push(`annotations: ${e instanceof Error ? e.message : e}`);
+    return [] as PageAnnotation[];
+  });
+  return { pageNumber, width: vp.width, height: vp.height, source: "TEXT_LAYER", items: [...controls, ...marked], images: graphics.images, textLayerChars, annotations };
+}
+
+const ANNOTATION_KINDS: Record<string, PageAnnotation["kind"]> = { Stamp: "STAMP", FreeText: "FREETEXT", Ink: "INK", Square: "SQUARE" };
+
+async function readAnnotations(page: PdfPage, height: number): Promise<PageAnnotation[]> {
+  const raw = (await page.getAnnotations()) as { subtype?: string; rect?: number[]; contentsObj?: { str?: string }; contents?: string }[];
+  const out: PageAnnotation[] = [];
+  for (const a of raw) {
+    if (!a.subtype || a.subtype === "Link" || a.subtype === "Widget" || !a.rect) continue;
+    const [x1, y1, x2, y2] = a.rect;
+    if (x2 - x1 < 1 && y2 - y1 < 1) continue;
+    out.push({
+      kind: ANNOTATION_KINDS[a.subtype] ?? "OTHER",
+      bbox: { x: x1, y: height - y2, w: x2 - x1, h: y2 - y1 },
+      text: (a.contentsObj?.str ?? a.contents ?? "").trim(),
+    });
+  }
+  return out;
 }
 
 export interface ExtractOptions {
