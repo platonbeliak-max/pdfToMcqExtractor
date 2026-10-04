@@ -52,6 +52,13 @@ export interface StructuredQuestion {
   createdAt: string;
   updatedAt: string;
   isEdited?: boolean;
+  imageId?: string;
+  answerOrigin?: "file" | "ai";
+  aiSources?: { title: string; url: string; kind?: "wikipedia" | "pubmed" | "europepmc" }[];
+  aiConfidence?: "high" | "medium" | "low";
+  aiMode?: "free" | "ai";
+  aiTried?: boolean;
+  lookupVersion?: number;
   originalQuestion?: {
     text: string;
     options: QuestionOptionItem[];
@@ -78,6 +85,20 @@ export interface MCQQuestion {
   isEdited?: boolean;
   category?: string;
   tags?: string[];
+  /** How many times this unique question was found across attempts/documents. */
+  attempts?: number;
+  /** Key of a picture saved in the browser image store (labelled-figure questions). */
+  imageId?: string;
+}
+
+/** Splits a stored answer key ("A,C" / "A, C") into individual option keys. */
+export function answerKeys(key: string | null | undefined): string[] {
+  if (!key) return [];
+  return key.split(/[,;|]/).map((k) => k.trim()).filter(Boolean);
+}
+
+export function isCorrectKey(answerKey: string | null | undefined, optionKey: string): boolean {
+  return answerKeys(answerKey).includes(optionKey);
 }
 
 export interface ExtractionStats {
@@ -210,12 +231,20 @@ export function toStructuredQuestion(
     .map(([key, text]) => ({ key, text }));
 
   const ansKey = mcq.correctAnswer || "";
-  const ansText = mcq.answerText || (ansKey ? mcq.options?.[ansKey] || "" : "");
+  const ansText =
+    mcq.answerText ||
+    (ansKey
+      ? answerKeys(ansKey)
+          .map((k) => mcq.options?.[k])
+          .filter(Boolean)
+          .join("; ")
+      : "");
 
   const optionScore = optionsList.length >= 4 ? 0.98 : optionsList.length >= 3 ? 0.85 : 0.6;
-  const answerScore = ansKey ? 0.99 : 0.0;
+  const hasAnswer = Boolean(ansKey || ansText);
+  const answerScore = hasAnswer ? 0.99 : 0.0;
   const questionScore = mcq.question.length > 10 ? 0.99 : 0.8;
-  const overall = Number(((questionScore + optionScore + (ansKey ? answerScore : 0.5)) / 3).toFixed(2));
+  const overall = Number(((questionScore + optionScore + (hasAnswer ? answerScore : 0.5)) / 3).toFixed(2));
 
   return {
     _id: mcq.id,
@@ -225,7 +254,7 @@ export function toStructuredQuestion(
       text: mcq.question,
     },
     options: optionsList,
-    answer: ansKey ? { key: ansKey, text: ansText } : null,
+    answer: ansKey || ansText ? { key: ansKey, text: ansText } : null,
     explanation: mcq.explanation,
     source: {
       documentId: docId,
@@ -245,6 +274,7 @@ export function toStructuredQuestion(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     isEdited: mcq.isEdited,
+    imageId: mcq.imageId,
   };
 }
 
@@ -258,7 +288,7 @@ export function toMCQQuestion(sq: StructuredQuestion): MCQQuestion {
   }
 
   let status: QuestionStatus = "needs_review";
-  if (sq.answer && sq.answer.key) {
+  if (sq.answer && (sq.answer.key || sq.answer.text)) {
     status = "answered";
   } else {
     status = "missing_answer";
@@ -270,7 +300,7 @@ export function toMCQQuestion(sq: StructuredQuestion): MCQQuestion {
     rawNumber: String(sq.questionNumber),
     question: sq.question.text,
     options: optionsMap,
-    correctAnswer: sq.answer ? sq.answer.key : null,
+    correctAnswer: sq.answer && sq.answer.key ? sq.answer.key : null,
     answerText: sq.answer ? sq.answer.text : undefined,
     confidence: sq.confidence.level,
     status,
@@ -280,5 +310,8 @@ export function toMCQQuestion(sq: StructuredQuestion): MCQQuestion {
     isEdited: sq.isEdited,
     category: sq.category,
     tags: sq.tags,
+    imageId: sq.imageId,
   };
 }
+
+export const isFigureQuestion = (q: { tags?: string[]; imageId?: string }) => Boolean(q.imageId) || Boolean(q.tags?.includes("figure"));

@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Navbar, PlatformTab } from "@/components/navbar";
+import { LandingHero } from "@/components/landing-hero";
 import { PdfUploader } from "@/components/pdf-uploader";
 import { ExtractionProgressView } from "@/components/extraction-progress";
 import { StatsCard } from "@/components/stats-card";
@@ -14,6 +15,8 @@ import { useToast } from "@/components/toast";
 import { DashboardView } from "@/components/dashboard-view";
 import { QuestionBankView } from "@/components/question-bank-view";
 import { SvgEditorModal } from "@/components/svg-editor-modal";
+import { TestView } from "@/components/test-view";
+import { useT } from "@/lib/i18n";
 import {
   MCQQuestion,
   StructuredQuestion,
@@ -23,19 +26,21 @@ import {
   toStructuredQuestion,
   toMCQQuestion,
 } from "@/types/question";
-import { extractTextFromPDFClient } from "@/lib/client-pdf-parser";
+import { extractTextFromPDFClient, type ClientExtractionResult } from "@/lib/client-pdf-parser";
 import { parseMCQDocument } from "@/lib/question-parser";
 import {
   loadSavedQuestions,
   persistQuestions,
   loadSavedDocuments,
   registerDocument,
+  deleteDocumentWithQuestions,
+  clearAllStorage,
 } from "@/lib/question-store";
+import type { TestMode } from "@/components/test-view";
 import {
   Sparkles,
   FileText,
   AlertCircle,
-  AlertTriangle,
   Eye,
   EyeOff,
   Layers,
@@ -48,6 +53,8 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { isScrambledBijoyText } from "@/lib/text-normalizer";
+import { hasAnswer } from "@/lib/answerable";
+import { lookupAiAnswer, NoAnswerError, AiBillingError, AiRateLimitError, LOOKUP_VERSION } from "@/lib/ai-answer";
 
 const STORAGE_KEY = "pdf-mcq-saved-session";
 
@@ -56,6 +63,7 @@ export default function Home() {
 
   // Persistent Question Bank state
   const [allQuestions, setAllQuestions] = useState<StructuredQuestion[]>([]);
+  const [testMode, setTestMode] = useState<TestMode>("all");
   const [allDocuments, setAllDocuments] = useState<DocumentRecord[]>([]);
 
   // Current upload session state
@@ -86,6 +94,7 @@ export default function Home() {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
 
   const { showToast } = useToast();
+  const { t } = useT();
 
   // Load saved session and persistent question bank on initial render
   useEffect(() => {
@@ -115,6 +124,88 @@ export default function Home() {
     }
   }, []);
 
+  const latestBankRef = useRef<StructuredQuestion[]>([]);
+  const autoRunningRef = useRef(false);
+  const autoFailedRef = useRef<Set<string>>(new Set());
+  const autoBlockedRef = useRef(false);
+  const unmountedRef = useRef(false);
+  const [autoKick, setAutoKick] = useState(0);
+  const [autoProgress, setAutoProgress] = useState<{ done: number; total: number } | null>(null);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    latestBankRef.current = allQuestions;
+    const isTarget = (q: StructuredQuestion) =>
+      (!hasAnswer(q) || (q.answerOrigin === "ai" && q.aiMode === "ai")) &&
+      (q.lookupVersion ?? 0) < LOOKUP_VERSION &&
+      !autoFailedRef.current.has(q.id) &&
+      q.question.text.trim().length >= 3;
+    if (autoRunningRef.current || autoBlockedRef.current) return;
+    const queued = allQuestions.filter(isTarget).length;
+    if (queued === 0) return;
+
+    autoRunningRef.current = true;
+    let done = 0;
+    let found = 0;
+    const total = queued;
+    setAutoProgress({ done, total });
+
+    const commit = (result: StructuredQuestion) => {
+      const next = latestBankRef.current.map((q) => (q.id === result.id ? result : q));
+      latestBankRef.current = next;
+      setAllQuestions(next);
+      persistQuestions(next);
+    };
+
+    const inFlight = new Set<string>();
+    const worker = async () => {
+      while (!unmountedRef.current && !autoBlockedRef.current) {
+        const target = latestBankRef.current.find((q) => isTarget(q) && !inFlight.has(q.id));
+        if (!target) break;
+        inFlight.add(target.id);
+        try {
+          commit(await lookupAiAnswer(target));
+          found++;
+        } catch (err) {
+          if (err instanceof NoAnswerError) {
+            const stripped =
+              target.aiMode === "ai"
+                ? { answer: null, answerOrigin: undefined, aiMode: undefined, aiSources: undefined, aiConfidence: undefined, explanation: undefined }
+                : {};
+            commit({ ...target, ...stripped, aiTried: true, lookupVersion: LOOKUP_VERSION });
+          } else if (err instanceof AiRateLimitError || err instanceof AiBillingError) {
+            autoBlockedRef.current = true;
+          } else {
+            autoFailedRef.current.add(target.id);
+          }
+        } finally {
+          inFlight.delete(target.id);
+        }
+        done++;
+        setAutoProgress({ done, total: Math.max(total, done) });
+      }
+    };
+
+    (async () => {
+      try {
+        await Promise.all(Array.from({ length: 3 }, worker));
+      } finally {
+        autoRunningRef.current = false;
+        if (!unmountedRef.current) {
+          setAutoProgress(null);
+          if (found > 0) showToast(t("autoAnswersDone", { n: found }), t("autoAnswersBody"), "success");
+          if (!autoBlockedRef.current && latestBankRef.current.some(isTarget)) setAutoKick((k) => k + 1);
+        }
+      }
+    })();
+  }, [allQuestions, autoKick]);
+
   const handleUpdateBankQuestions = (updated: StructuredQuestion[]) => {
     setAllQuestions(updated);
     persistQuestions(updated);
@@ -133,7 +224,7 @@ export default function Home() {
 
     setProgress({
       step: "analyzing",
-      message: "Analyzing PDF document structure...",
+      message: t("progAnalyzing"),
       percent: 15,
     });
 
@@ -151,32 +242,58 @@ export default function Home() {
       // Client-side extraction handles files up to 150MB in browser without 413 error
       setProgress({
         step: "extracting",
-        message: "Reading PDF pages in browser memory...",
+        message: t("progReading"),
         percent: 25,
       });
 
       const arrayBuffer = await file.arrayBuffer();
-      const clientRes = await extractTextFromPDFClient(
+      // pdf.js transfers (detaches) the buffer it receives, so keep a copy for the engine fallback.
+      const engineBytes = arrayBuffer.slice(0);
+      const runEngine = async () => {
+        setProgress({ step: "detecting_questions", message: t("progEngine"), percent: 88 });
+        const { extractWithEngine } = await import("@/lib/ingestion/to-mcq");
+        return extractWithEngine(engineBytes, { ocr: options.useOcr === "force" ? "force" : "auto" });
+      };
+      // The universal engine is the primary extractor; the legacy parser only runs when it finds nothing.
+      const engineFirst = await runEngine().catch((e) => {
+        console.warn("Engine extraction failed, falling back to legacy parser:", e);
+        return null;
+      });
+      if (engineFirst && engineFirst.questions.length > 0) extractedQuestions = engineFirst.questions;
+      const clientRes: ClientExtractionResult = extractedQuestions.length > 0 && !options.useAi
+        ? { success: true, totalPages: engineFirst!.pageCount, pages: [], fullText: "", isScanned: false }
+        : await extractTextFromPDFClient(
         arrayBuffer,
         (curr, total, msg) => {
           setProgress({
             step: options.useOcr === "force" ? "ocr" : "extracting",
-            message: msg || `Extracting page ${curr} of ${total}...`,
+            message: options.useOcr === "force" ? t("progOcrPage", { n: curr, total }) : t("progPage", { n: curr, total }),
             percent: Math.min(85, Math.round(25 + (curr / total) * 60)),
           });
         },
-        { forceOcr: options.useOcr === "force", lang: "ben+eng" }
+        { forceOcr: options.useOcr === "force", lang: "rus+eng" }
       );
 
       if (!clientRes.success) {
-        throw new Error(clientRes.error || "Failed to extract text from PDF.");
+        console.warn("Legacy parser error:", clientRes.error);
+        const legacyError = t("errExtractFail");
+        const engineRes = await runEngine().catch((e) => {
+          console.error("Engine fallback failed:", e);
+          return null;
+        });
+        if (!engineRes) throw new Error(legacyError);
+        clientRes.success = true;
+        clientRes.pages = [];
+        clientRes.fullText = "";
+        clientRes.totalPages = engineRes.pageCount;
+        extractedQuestions = engineRes.questions;
       }
 
       // If AI extraction requested, send clean JSON text to /api/extract
       if (options.useAi && (options.apiKey || process.env.NEXT_PUBLIC_HAS_AI)) {
         setProgress({
           step: "detecting_answers",
-          message: "Enhancing question detection with AI...",
+          message: t("progAi"),
           percent: 85,
         });
 
@@ -210,11 +327,20 @@ export default function Home() {
       if (extractedQuestions.length === 0) {
         setProgress({
           step: "detecting_questions",
-          message: "Isolating questions, options, and answers...",
+          message: t("progIsolating"),
           percent: 90,
         });
 
         extractedQuestions = parseMCQDocument(clientRes.pages, clientRes.fullText);
+        if (extractedQuestions.length === 0) {
+          try {
+            extractedQuestions = (await runEngine()).questions;
+          } catch (e) {
+            console.warn("Engine fallback failed:", e);
+          }
+        }
+      }
+      if (!computedStats || computedStats.totalQuestions !== extractedQuestions.length) {
         computedStats = {
           totalQuestions: extractedQuestions.length,
           answeredCount: extractedQuestions.filter((q) => q.status === "answered").length,
@@ -227,7 +353,7 @@ export default function Home() {
 
       setProgress({
         step: "completed",
-        message: "MCQ extraction completed successfully!",
+        message: t("progCompleted"),
         percent: 100,
       });
 
@@ -272,24 +398,16 @@ export default function Home() {
           spread: 70,
           origin: { y: 0.6 },
         });
-        showToast(
-          "Extraction Complete!",
-          `Extracted ${extractedQuestions.length} questions into Question Bank`,
-          "success"
-        );
+        showToast(t("toastDoneT"), t("toastExtracted", { n: extractedQuestions.length }), "success");
       } else {
-        showToast(
-          "No Questions Detected",
-          "Ensure document contains Multiple Choice Questions (MCQs)",
-          "info"
-        );
+        showToast(t("toastNone"), t("toastNoneD"), "info");
       }
     } catch (err: unknown) {
       console.error("Extraction failed:", err);
-      const msg = err instanceof Error ? err.message : "Failed to process PDF document.";
+      const msg = t("errProcess");
       setError(msg);
       setProgress({ step: "error", message: msg, percent: 0 });
-      showToast("Extraction Error", msg, "error");
+      showToast(t("toastError"), msg, "error");
     } finally {
       setIsProcessing(false);
     }
@@ -314,7 +432,7 @@ export default function Home() {
       };
       setStats(updatedStats);
     }
-    showToast("Question Saved", "Changes updated in Question Bank", "success");
+    showToast(t("toastSaved"), undefined, "success");
   };
 
   const handleDeleteQuestion = (id: string) => {
@@ -325,7 +443,7 @@ export default function Home() {
     setAllQuestions(nextBank);
     persistQuestions(nextBank);
 
-    showToast("Question Deleted", undefined, "info");
+    showToast(t("toastDeleted"), undefined, "info");
   };
 
   const handleApproveAllCurrent = () => {
@@ -343,7 +461,7 @@ export default function Home() {
     setAllQuestions(nextBank);
     persistQuestions(nextBank);
 
-    showToast("All Approved", `Marked ${approved.length} questions as verified`, "success");
+    showToast(t("toastApproved"), String(approved.length), "success");
   };
 
   const handleSelectQuestion = (q: MCQQuestion) => {
@@ -354,7 +472,7 @@ export default function Home() {
   };
 
   const handleResetSession = () => {
-    if (confirm("Reset current extraction session and upload a new PDF?")) {
+    if (confirm(t("reset"))) {
       setCurrentQuestions([]);
       setStats(null);
       setPdfFile(null);
@@ -363,8 +481,33 @@ export default function Home() {
       setIsBijoyDetected(false);
       localStorage.removeItem(STORAGE_KEY);
       setActiveTab("upload");
-      showToast("Ready for New PDF", "Upload a document to extract questions", "info");
+      
     }
+  };
+
+  const handleDeleteDocument = (doc: DocumentRecord) => {
+    if (!confirm(t("dDeleteConfirm", { name: doc.fileName }))) return;
+    const next = deleteDocumentWithQuestions(doc, allQuestions);
+    setAllDocuments(next.documents);
+    setAllQuestions(next.questions);
+  };
+
+  const handleClearAll = () => {
+    if (!confirm(t("dClearConfirm"))) return;
+    clearAllStorage(STORAGE_KEY);
+    setAllDocuments([]);
+    setAllQuestions([]);
+    setCurrentQuestions([]);
+    setStats(null);
+    setPdfFile(null);
+    setSelectedQuestionId(null);
+    setError(null);
+    setIsBijoyDetected(false);
+  };
+
+  const handleStartTest = (mode: TestMode) => {
+    setTestMode(mode);
+    setActiveTab("test");
   };
 
   // Filter & Search calculations for review screen
@@ -400,8 +543,17 @@ export default function Home() {
   }, [currentQuestions]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
-      <Navbar
+  <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
+    {autoProgress && (
+      <div
+        role="status"
+        aria-live="polite"
+        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-2rem)] px-4 py-2 rounded-full bg-sky-600 text-white text-xs font-bold shadow-lg"
+      >
+        {t("autoAnswersRunning", { done: autoProgress.done, total: autoProgress.total })}
+      </div>
+    )}
+    <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         questionCount={allQuestions.length}
@@ -416,6 +568,9 @@ export default function Home() {
             questions={allQuestions}
             documents={allDocuments}
             onNavigateTab={setActiveTab}
+            onDeleteDocument={handleDeleteDocument}
+            onClearAll={handleClearAll}
+            onStartTest={handleStartTest}
           />
         )}
 
@@ -437,79 +592,13 @@ export default function Home() {
             {/* Step 1: Upload Dropzone if no active extraction */}
             {!isProcessing && currentQuestions.length === 0 && (
               <div className="py-6 sm:py-12 space-y-12">
-                <div className="text-center max-w-3xl mx-auto space-y-3">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-semibold border border-blue-500/20">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Production PDF Question Bank Platform</span>
-                  </div>
-                  <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-slate-900 dark:text-white">
-                    Extract Pure Questions from{" "}
-                    <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                      Any Exam PDF
-                    </span>
-                  </h1>
-                  <p className="text-base text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                    Detects strictly questions, options, and answers while ignoring all headers,
-                    footers, instructions, and book metadata. Native English and Bengali (বাংলা) support.
-                  </p>
-                </div>
+                <LandingHero />
 
                 <PdfUploader
                   onFileSelect={(file, opts) => handleStartExtraction(file, file.name, opts)}
-                  onSampleSelect={(blob, name, opts) => handleStartExtraction(blob, name, opts)}
                   isLoading={isProcessing}
                 />
 
-                {/* Highlights */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto pt-6 border-t border-slate-200/80 dark:border-slate-800/80">
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 mb-2">
-                      <CheckCircle className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Noise Filtering
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Ignores chapter titles, negative marking notes, page numbers, and disclaimers.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 mb-2">
-                      <BookOpen className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Bengali &amp; English
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Full support for ১, ২, ৩, ক, খ, গ, ঘ and standard A, B, C, D numbering.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 mb-2">
-                      <Cpu className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Text &amp; OCR Engine
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Extracts directly in browser up to 150MB with zero server upload limits.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 shadow-2xs">
-                    <div className="p-2 w-fit rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 mb-2">
-                      <Layers className="w-4 h-4" />
-                    </div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-                      SVG &amp; CSV Exports
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Download individual/bulk vector SVGs and standard CSVs with UTF-8 BOM.
-                    </p>
-                  </div>
-                </div>
               </div>
             )}
 
@@ -529,39 +618,6 @@ export default function Home() {
                 {/* Stats Card */}
                 {stats && <StatsCard stats={stats} />}
 
-                {/* Bijoy Font Encoding Warning Banner with 1-Click OCR Repair */}
-                {isBijoyDetected && (
-                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                      <div>
-                        <div className="font-bold text-amber-900 dark:text-amber-100 text-sm">
-                          পুরোনো বিজয় / ANSI ফন্ট শনাক্ত হয়েছে (Bijoy Font Encoding Detected)
-                        </div>
-                        <div className="text-xs text-amber-700 dark:text-amber-300 mt-1 leading-relaxed">
-                          এই PDF-টিতে ইউনিকোডের বদলে পুরোনো বিজয় (SutonnyMJ) ফন্ট রয়েছে, যার কারণে সাধারণ টেক্সট এক্সট্রাকশনে অক্ষরগুলো বিকৃত (যেমন &quot;থকানরি&quot; বা &quot;রবশ্ব&quot;) হতে পারে।
-                          ১০০% নিখুঁত করতে নিচের বাটনে ক্লিক করে <strong>OCR মোডে পুনরায় এক্সট্র্যাক্ট</strong> করুন।
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (pdfFile) {
-                          handleStartExtraction(pdfFile, filename, {
-                            useAi: false,
-                            useOcr: "force",
-                          });
-                        }
-                      }}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md transition-all whitespace-nowrap self-start sm:self-auto cursor-pointer"
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      OCR দিয়ে ফিক্স করুন (Fix with OCR)
-                    </button>
-                  </div>
-                )}
-
                 {/* Toolbar */}
                 <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
                   <div className="flex items-center gap-2">
@@ -569,7 +625,7 @@ export default function Home() {
                       {filename}
                     </span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-semibold">
-                      {currentQuestions.length} Questions
+                      {currentQuestions.length} {t("questions")}
                     </span>
                   </div>
 
@@ -580,7 +636,7 @@ export default function Home() {
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      Approve All
+                      {t("approveAll")}
                     </button>
 
                     <button
@@ -591,12 +647,12 @@ export default function Home() {
                       {showPdfPreview ? (
                         <>
                           <EyeOff className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Hide PDF</span>
+                          <span className="hidden sm:inline">{t("hidePdf")}</span>
                         </>
                       ) : (
                         <>
                           <Eye className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Show PDF</span>
+                          <span className="hidden sm:inline">{t("showPdf")}</span>
                         </>
                       )}
                     </button>
@@ -607,7 +663,8 @@ export default function Home() {
                       type="button"
                       onClick={handleResetSession}
                       className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                      title="Upload Another PDF"
+                      title={t("newPdf")}
+                      aria-label={t("newPdf")}
                     >
                       <RefreshCw className="w-4 h-4" />
                     </button>
@@ -646,7 +703,7 @@ export default function Home() {
                       <div className="p-12 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50">
                         <FileText className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                         <h4 className="font-bold text-slate-700 dark:text-slate-300 text-sm">
-                          No matching questions
+                          {t("noMatch")}
                         </h4>
                       </div>
                     ) : (
@@ -671,16 +728,20 @@ export default function Home() {
           </div>
         )}
 
+        {activeTab === "test" && (
+          <TestView key={testMode} questions={allQuestions} initialMode={testMode} onGoUpload={() => setActiveTab("upload")} />
+        )}
+
         {/* VIEW D: SVG STUDIO STANDALONE TAB */}
         {activeTab === "svg-studio" && (
           <div className="space-y-4">
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
-                  SVG Vector Studio &amp; Layout Engine
+                  {t("svgStudioT")}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Select a question below to preview and export semantic vector SVG graphics
+                  {t("svgStudioD")}
                 </p>
               </div>
             </div>
@@ -689,16 +750,16 @@ export default function Home() {
               <div className="p-12 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                 <Sparkles className="w-10 h-10 text-amber-500 mx-auto mb-3" />
                 <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                  No Questions Available
+                  {t("svgNoneT")}
                 </h4>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Extract a PDF document or import CSV to start designing SVGs.
+                  {t("svgNoneD")}
                 </p>
                 <button
                   onClick={() => setActiveTab("upload")}
                   className="mt-4 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
                 >
-                  Upload PDF Now
+                  {t("svgUploadNow")}
                 </button>
               </div>
             ) : (
@@ -710,7 +771,7 @@ export default function Home() {
                     className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 cursor-pointer transition-all shadow-2xs hover:shadow-xs"
                   >
                     <div className="flex items-center justify-between text-xs font-bold mb-2">
-                      <span className="text-blue-600">Question #{q.questionNumber}</span>
+                      <span className="text-blue-600">{t("svgQ", { n: q.questionNumber })}</span>
                       <span className="text-amber-500 flex items-center gap-1">
                         <Sparkles className="w-3.5 h-3.5" /> SVG
                       </span>
@@ -719,7 +780,7 @@ export default function Home() {
                       {q.question.text}
                     </p>
                     <div className="mt-2 text-[10px] text-slate-400">
-                      Answer: {q.answer?.key || "None"} • {q.options.length} Options
+                      {t("svgAns", { a: q.answer?.key || t("svgNoAns"), n: q.options.length })}
                     </div>
                   </div>
                 ))}

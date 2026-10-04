@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Search, X, Filter } from "lucide-react";
-import { ConfidenceLevel, QuestionStatus } from "@/types/question";
+import { useT } from "@/lib/i18n";
 
 export type FilterOption =
   | "all"
@@ -32,12 +32,13 @@ export function SearchBar({
   onFilterChange,
   counts,
 }: SearchBarProps) {
+  const { t } = useT();
   const filterPills: { id: FilterOption; label: string; count: number }[] = [
-    { id: "all", label: "All Questions", count: counts.all },
-    { id: "answered", label: "Answered", count: counts.answered },
-    { id: "missing_answer", label: "Answer Missing", count: counts.missing_answer },
-    { id: "needs_review", label: "Needs Review", count: counts.needs_review },
-    { id: "high_confidence", label: "High Confidence", count: counts.high_confidence },
+    { id: "all", label: t("fAll"), count: counts.all },
+    { id: "answered", label: t("fAnswered"), count: counts.answered },
+    { id: "missing_answer", label: t("fMissing"), count: counts.missing_answer },
+    { id: "needs_review", label: t("fReview"), count: counts.needs_review },
+    { id: "high_confidence", label: t("fHigh"), count: counts.high_confidence },
   ];
 
   return (
@@ -49,7 +50,7 @@ export function SearchBar({
           type="text"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search in questions, options, or jump to question number (e.g., '12' or 'Dhaka')..."
+          placeholder={t("searchPh")}
           className="w-full pl-10 pr-9 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
         />
         {searchQuery && (

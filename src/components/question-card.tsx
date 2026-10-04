@@ -1,7 +1,9 @@
 "use client";
 
 import React from "react";
-import { MCQQuestion } from "@/types/question";
+import { MCQQuestion, answerKeys, isCorrectKey, isFigureQuestion } from "@/types/question";
+import { FigureImage } from "./figure-image";
+import { useT } from "@/lib/i18n";
 import {
   Copy,
   Edit2,
@@ -34,6 +36,8 @@ export function QuestionCard({
   onOpenSvg,
 }: QuestionCardProps) {
   const { showToast } = useToast();
+  const { t } = useT();
+  const correctKeys = answerKeys(question.correctAnswer);
 
   const handleCopy = (text: string, title: string) => {
     navigator.clipboard.writeText(text);
@@ -56,11 +60,11 @@ export function QuestionCard({
 
   const copyAnswerOnly = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (question.correctAnswer) {
-      const val = question.options[question.correctAnswer]
-        ? `${question.correctAnswer}. ${question.options[question.correctAnswer]}`
-        : question.correctAnswer;
-      handleCopy(val, "Copied Answer!");
+    if (correctKeys.length || question.answerText) {
+      const val = correctKeys.length
+        ? correctKeys.map((k) => `${k}. ${question.options[k] ?? ""}`).join("\n")
+        : question.answerText || "";
+      handleCopy(val, "OK");
     } else {
       showToast("No answer detected to copy", undefined, "info");
     }
@@ -73,24 +77,24 @@ export function QuestionCard({
   };
 
   const options = question.options || {};
-  const optionKeys = Object.keys(options).sort();
+  const optionKeys = Object.keys(options).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
   // Confidence styling
   const confidenceConfig = {
     high: {
-      label: "High Confidence",
+      label: "OK",
       className:
         "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-500/20",
       icon: CheckCircle2,
     },
     medium: {
-      label: "Medium Confidence",
+      label: "~",
       className:
         "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-500/20",
       icon: AlertTriangle,
     },
     "needs-review": {
-      label: "Needs Review",
+      label: "?",
       className:
         "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-500/20",
       icon: HelpCircle,
@@ -112,11 +116,31 @@ export function QuestionCard({
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
           <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-xs">
-            Question {String(question.number).padStart(2, "0")}
+            {t("question")} {String(question.number).padStart(2, "0")}
           </span>
           {question.pageNumber && (
             <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
-              Page {question.pageNumber}
+              {t("page")} {question.pageNumber}
+            </span>
+          )}
+          {question.attempts && question.attempts > 1 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-medium">
+              {t("foundTimes")} ×{question.attempts}
+            </span>
+          )}
+          {question.status === "missing_answer" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 font-bold">
+              {t("needAnswer")}
+            </span>
+          )}
+          {isFigureQuestion(question) && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-bold">
+              {t("figBadge")}
+            </span>
+          )}
+          {question.tags?.includes("unreadable") && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 font-bold">
+              {t("unreadable")}
             </span>
           )}
           {question.isEdited && (
@@ -128,6 +152,7 @@ export function QuestionCard({
 
         <div className="flex items-center gap-1.5">
           <span
+            title={t("hConf")}
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${confidenceConfig.className}`}
           >
             <ConfIcon className="w-3 h-3" />
@@ -141,10 +166,12 @@ export function QuestionCard({
         {question.question}
       </div>
 
+      {question.imageId && <FigureImage imageId={question.imageId} className="mb-4 max-w-xl" />}
+
       {/* Options Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
         {optionKeys.map((key) => {
-          const isCorrect = question.correctAnswer === key;
+          const isCorrect = isCorrectKey(question.correctAnswer, key);
           return (
             <div
               key={key}
@@ -176,19 +203,20 @@ export function QuestionCard({
       <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
         <div className="flex items-center gap-1.5">
           <span className="font-semibold text-slate-500 dark:text-slate-400">
-            Correct Answer:
+            {correctKeys.length > 1 ? t("correctAnswers") : t("correctAnswer")}:
           </span>
-          {question.correctAnswer ? (
-            <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-              <span>{question.correctAnswer}.</span>
+          {correctKeys.length > 0 ? (
+            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+              {correctKeys.join(", ")}
               <span className="font-normal text-slate-700 dark:text-slate-300">
-                {options[question.correctAnswer] || ""}
+                {" — "}
+                {correctKeys.map((k) => options[k] || "").join("; ")}
               </span>
             </span>
+          ) : question.answerText ? (
+            <span className="font-bold text-emerald-600 dark:text-emerald-400">{question.answerText}</span>
           ) : (
-            <span className="italic text-rose-500 font-medium">
-              Answer not detected (Needs Review)
-            </span>
+            <span className="italic text-rose-500 font-semibold">{t("needAnswerLong")}</span>
           )}
         </div>
 
@@ -198,46 +226,46 @@ export function QuestionCard({
           <button
             type="button"
             onClick={copyQuestionTextOnly}
-            title="Copy question text only"
+            title={t("hCopyQ")}
             className="px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium transition-colors"
           >
-            Copy Q
+            {t("copyQ")}
           </button>
           <button
             type="button"
             onClick={copyOptionsOnly}
-            title="Copy options only"
+            title={t("hCopyOpt")}
             className="px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium transition-colors"
           >
-            Copy Opt
+            {t("copyOpt")}
           </button>
           <button
             type="button"
             onClick={copyAnswerOnly}
-            title="Copy correct answer only"
+            title={t("hCopyAns")}
             className="px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium transition-colors"
           >
-            Copy Ans
+            {t("copyAns")}
           </button>
           <button
             type="button"
             onClick={copyFullMCQ}
-            title="Copy full MCQ (Question + Options + Answer)"
+            title={t("hCopyFull")}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 text-[11px] font-semibold transition-colors"
           >
             <Copy className="w-3 h-3" />
-            Copy Full
+            {t("copyFull")}
           </button>
 
           {/* SVG Studio */}
-          {onOpenSvg && (
+          {onOpenSvg && isFigureQuestion(question) && (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenSvg(question);
               }}
-              title="Open in SVG Studio"
+              title={t("hSvg")}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 text-[11px] font-bold transition-colors ml-1"
             >
               <Sparkles className="w-3 h-3 text-amber-500" />
@@ -252,7 +280,7 @@ export function QuestionCard({
               e.stopPropagation();
               onEdit(question);
             }}
-            title="Edit question"
+            title={t("hEdit")}
             className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-lg transition-colors ml-1"
           >
             <Edit2 className="w-3.5 h-3.5" />
@@ -263,11 +291,11 @@ export function QuestionCard({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (confirm(`Delete Question ${question.number}?`)) {
+              if (confirm(t("qcConfirmDel", { n: question.number }))) {
                 onDelete(question.id);
               }
             }}
-            title="Delete question"
+            title={t("hDelete")}
             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />

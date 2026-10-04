@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Hind_Siliguri } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { ToastProvider } from "@/components/toast";
+import { LangProvider } from "@/lib/i18n";
+import { HintLayer } from "@/components/hint-layer";
 
 const geistSans = Geist({
   variable: "--font-sans",
-  subsets: ["latin"],
+  subsets: ["latin", "cyrillic"],
 });
 
 const geistMono = Geist_Mono({
@@ -14,16 +16,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const hindSiliguri = Hind_Siliguri({
-  variable: "--font-bengali",
-  weight: ["300", "400", "500", "600", "700"],
-  subsets: ["bengali", "latin"],
-});
-
 export const metadata: Metadata = {
-  title: "PDF MCQ Extractor - Intelligent Question Bank Parser",
+  title: "Банк вопросов из PDF — Question Bank",
   description:
-    "Production-grade examination paper parser. Automatically extracts MCQs, options, and answer keys from English and Bengali PDFs with OCR and export capabilities.",
+    "Соберите базу уникальных вопросов с правильными ответами из PDF-тестов. Build a deduplicated question bank with correct answers from test PDFs (Russian / English).",
 };
 
 export default function RootLayout({
@@ -33,8 +29,8 @@ export default function RootLayout({
 }) {
   return (
     <html
-      lang="bn"
-      className={`${geistSans.variable} ${geistMono.variable} ${hindSiliguri.variable} h-full antialiased font-sans`}
+      lang="ru"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased font-sans`}
       suppressHydrationWarning
     >
       <body
@@ -60,7 +56,10 @@ export default function RootLayout({
             `,
           }}
         />
-        <ToastProvider>{children}</ToastProvider>
+        <LangProvider>
+          <ToastProvider>{children}</ToastProvider>
+          <HintLayer />
+        </LangProvider>
       </body>
     </html>
   );

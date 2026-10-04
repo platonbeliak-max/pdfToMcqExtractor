@@ -1,6 +1,7 @@
 "use client";
 
 import { ExtractionStats } from "@/types/question";
+import { useT } from "@/lib/i18n";
 import { CheckCircle, AlertTriangle, HelpCircle, FileText, Layers, Sparkles } from "lucide-react";
 
 interface StatsCardProps {
@@ -8,9 +9,10 @@ interface StatsCardProps {
 }
 
 export function StatsCard({ stats }: StatsCardProps) {
+  const { t } = useT();
   const cards = [
     {
-      label: "Total Questions",
+      label: t("stTotal"),
       value: stats.totalQuestions,
       icon: Layers,
       color: "text-blue-600 dark:text-blue-400",
@@ -18,7 +20,7 @@ export function StatsCard({ stats }: StatsCardProps) {
       borderColor: "border-blue-500/20",
     },
     {
-      label: "Answers Found",
+      label: t("stFound"),
       value: stats.answeredCount,
       icon: CheckCircle,
       color: "text-emerald-600 dark:text-emerald-400",
@@ -26,7 +28,7 @@ export function StatsCard({ stats }: StatsCardProps) {
       borderColor: "border-emerald-500/20",
     },
     {
-      label: "Answers Missing",
+      label: t("stMissing"),
       value: stats.unansweredCount,
       icon: HelpCircle,
       color: "text-amber-600 dark:text-amber-400",
@@ -34,7 +36,7 @@ export function StatsCard({ stats }: StatsCardProps) {
       borderColor: "border-amber-500/20",
     },
     {
-      label: "Needs Review",
+      label: t("stReview"),
       value: stats.needsReviewCount,
       icon: AlertTriangle,
       color: "text-rose-600 dark:text-rose-400",
@@ -42,13 +44,13 @@ export function StatsCard({ stats }: StatsCardProps) {
       borderColor: "border-rose-500/20",
     },
     {
-      label: "PDF Pages",
+      label: t("stPages"),
       value: stats.totalPages,
       icon: FileText,
       color: "text-indigo-600 dark:text-indigo-400",
       bgColor: "bg-indigo-500/10",
       borderColor: "border-indigo-500/20",
-      badge: stats.isOcrUsed ? "OCR Scanned" : "Selectable Text",
+      badge: stats.isOcrUsed ? t("stOcr") : t("stText"),
     },
   ];
 
