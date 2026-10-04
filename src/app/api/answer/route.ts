@@ -54,7 +54,8 @@ interface Doc {
   englishTitle?: string;
 }
 
-const UA = { "User-Agent": "pdf-mcq-study-app/1.0 (educational)" };
+// Wikimedia throttles generic agents hard; its policy asks for a contact URL in the User-Agent.
+const UA = { "User-Agent": "PdfMcqStudyApp/1.0 (https://github.com/platonbeliak-max/pdfToMcqExtractor)" };
 
 interface HostLimiter {
   max: number;
@@ -93,8 +94,8 @@ async function withLimiter<T>(limiter: HostLimiter, task: () => Promise<T>): Pro
 
 const MAX_ATTEMPTS = 2;
 const MAX_PAUSE_MS = 2500;
-const REQUEST_BUDGET_MS = 14_000;
-const FETCH_TIMEOUT_MS = 5_000;
+const REQUEST_BUDGET_MS = 10_000;
+const FETCH_TIMEOUT_MS = 3_500;
 
 const budget = new AsyncLocalStorage<{ deadline: number }>();
 
@@ -281,23 +282,6 @@ async function europePmcCount(query: string): Promise<number> {
   return data?.hitCount ?? 0;
 }
 
-async function europePmcSearch(query: string): Promise<Doc[]> {
-  const data = await getJson<{
-    resultList?: { result?: { id?: string; source?: string; title?: string; abstractText?: string }[] };
-  }>(
-    `https://www.ebi.ac.uk/europepmc/webservices/rest/search?${new URLSearchParams({ query, format: "json", resultType: "core", pageSize: "4" })}`,
-  );
-  return (data?.resultList?.result ?? [])
-    .filter((r) => r.id && r.source && r.title)
-    .map((r) => ({
-      kind: "europepmc" as const,
-      title: `${xmlText(r.title ?? "")} (Europe PMC)`,
-      rawTitle: xmlText(r.title ?? ""),
-      url: `https://europepmc.org/article/${r.source}/${r.id}`,
-      text: `${xmlText(r.title ?? "")}. ${xmlText(r.abstractText ?? "")}`,
-    }));
-}
-
 function quote(term: string): string {
   return `"${term.replace(/["()]/g, " ").replace(/\s+/g, " ").trim()}"`;
 }
@@ -360,13 +344,18 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
     .slice(0, 2)
     .join(" ");
 
+  let mainFailed = false;
   const [mainDocs, topicDocs, byTitle] = await Promise.all([
-    wikiSearch(lang, questionQuery, 4),
+    wikiSearch(lang, questionQuery, 4).catch(() => {
+      mainFailed = true;
+      return [] as Doc[];
+    }),
     topicQuery && topicQuery !== questionQuery ? wikiSearch(lang, topicQuery, 3).catch(() => [] as Doc[]) : Promise.resolve([] as Doc[]),
     wikiByTitles(lang, options.map((o) => o.text)),
   ]);
   const seenTitles = new Set<string>();
   const questionDocs = [...mainDocs, ...topicDocs].filter((d) => (seenTitles.has(d.rawTitle) ? false : (seenTitles.add(d.rawTitle), true)));
+  if (mainFailed && questionDocs.length === 0 && byTitle.size === 0) throw new SourcesUnavailableError();
 
   const normalizedTitle = (text: string) => text.replace(/\s+/g, " ").trim();
   const ownDocs: (Doc | undefined)[] = options.map((o) => byTitle.get(normalizedTitle(o.text)));
@@ -416,11 +405,14 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
 
   checks.push({
     label: lang === "ru" ? "собственная статья Википедии о варианте" : "the option's own Wikipedia article",
-    winner: pickWinner(
-      options.map((_, i) => (ownDocs[i] ? coverage(questionStems, new Set(stems(ownDocs[i]!.text))) : 0)),
-      0.4,
-      0.15,
-    ),
+    winner: (() => {
+      const ownStems = ownDocs.map((d) => (d ? new Set(stems(d.text)) : null));
+      const present = ownStems.filter((s): s is Set<string> => s !== null);
+      // Stems every option's article shares ("орган", "какой") cannot tell the options apart.
+      const distinctive = questionStems.filter((s) => present.length < 2 || !present.every((set) => set.has(s)));
+      const wanted = distinctive.length > 0 ? distinctive : questionStems;
+      return pickWinner(ownStems.map((set) => (set ? coverage(wanted, set) : 0)), 0.4, 0.15);
+    })(),
   });
 
   if (englishDocs.length > 0) {
@@ -452,7 +444,10 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
   });
   const ranked = [...votes.entries()].sort((a, b) => b[1].length - a[1].length);
   const top = ranked[0];
-  if (!top || ranked.length > 1 || top[1].length < 2) {
+  // Co-occurrence counts (English phrase hits, Europe PMC) favour common organs like "liver"; at least one check must read article content.
+  const contentLabels = new Set(checks.slice(0, 2).map((c) => c.label));
+  const hasContentVote = !!top && top[1].some((label) => contentLabels.has(label));
+  if (!top || ranked.length > 1 || top[1].length < 2 || !hasContentVote) {
     return Response.json(
       { error: "no_answer", debug: { checks, questionEnglish, optionEnglish, hitCounts, own: ownDocs.map((d) => d?.rawTitle), q: questionDocs.map((d) => d.rawTitle) } },
       { status: 404 },
@@ -480,11 +475,18 @@ async function openLookup(question: string): Promise<Response> {
   const query = keywords(question, 5);
   if (!query || questionStems.length === 0) return Response.json({ error: "no_answer" }, { status: 404 });
 
+  let failures = 0;
+  const tolerant = (p: Promise<Doc[]>) =>
+    p.catch(() => {
+      failures++;
+      return [] as Doc[];
+    });
   const [byKeywords, byQuestion, byShort] = await Promise.all([
-    wikiSearch(lang, query, 4),
-    wikiSearch(lang, question.slice(0, 250), 4),
-    wikiSearch(lang, keywords(question, 3), 4),
+    tolerant(wikiSearch(lang, query, 4)),
+    tolerant(wikiSearch(lang, question.slice(0, 250), 4)),
+    tolerant(wikiSearch(lang, keywords(question, 3), 4)),
   ]);
+  if (failures === 3) throw new SourcesUnavailableError();
 
   const tally = new Map<string, { doc: Doc; searches: number }>();
   [byKeywords, byQuestion, byShort].forEach((docs) => {
