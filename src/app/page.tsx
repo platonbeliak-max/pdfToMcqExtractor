@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Navbar, PlatformTab } from "@/components/navbar";
 import { LandingHero } from "@/components/landing-hero";
 import { PdfUploader } from "@/components/pdf-uploader";
@@ -53,6 +53,8 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { isScrambledBijoyText } from "@/lib/text-normalizer";
+import { hasAnswer } from "@/lib/answerable";
+import { lookupAiAnswer, NoAnswerError, AiBillingError, AiRateLimitError } from "@/lib/ai-answer";
 
 const STORAGE_KEY = "pdf-mcq-saved-session";
 
@@ -121,6 +123,78 @@ export default function Home() {
       console.warn("Failed to load initial data:", e);
     }
   }, []);
+
+  const latestBankRef = useRef<StructuredQuestion[]>([]);
+  const autoRunningRef = useRef(false);
+  const autoFailedRef = useRef<Set<string>>(new Set());
+  const autoBlockedRef = useRef(false);
+  const unmountedRef = useRef(false);
+  const [autoKick, setAutoKick] = useState(0);
+  const [autoProgress, setAutoProgress] = useState<{ done: number; total: number } | null>(null);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    latestBankRef.current = allQuestions;
+    const isTarget = (q: StructuredQuestion) =>
+      !hasAnswer(q) &&
+      !q.aiTried &&
+      !autoFailedRef.current.has(q.id) &&
+      !q.tags?.includes("unreadable") &&
+      q.question.text.trim().length >= 3;
+    if (autoRunningRef.current || autoBlockedRef.current) return;
+    const queued = allQuestions.filter(isTarget).length;
+    if (queued === 0) return;
+
+    autoRunningRef.current = true;
+    let done = 0;
+    let found = 0;
+    const total = queued;
+    setAutoProgress({ done, total });
+
+    const commit = (result: StructuredQuestion) => {
+      const next = latestBankRef.current.map((q) => (q.id === result.id ? result : q));
+      latestBankRef.current = next;
+      setAllQuestions(next);
+      persistQuestions(next);
+    };
+
+    (async () => {
+      try {
+        while (!unmountedRef.current) {
+          const target = latestBankRef.current.find(isTarget);
+          if (!target) break;
+          try {
+            commit(await lookupAiAnswer(target));
+            found++;
+          } catch (err) {
+            if (err instanceof NoAnswerError) {
+              commit({ ...target, aiTried: true });
+            } else if (err instanceof AiRateLimitError || err instanceof AiBillingError) {
+              autoBlockedRef.current = true;
+              break;
+            } else {
+              autoFailedRef.current.add(target.id);
+            }
+          }
+          done++;
+          setAutoProgress({ done, total: Math.max(total, done) });
+        }
+      } finally {
+        autoRunningRef.current = false;
+        if (!unmountedRef.current) {
+          setAutoProgress(null);
+          if (found > 0) showToast(t("autoAnswersDone", { n: found }), t("autoAnswersBody"), "success");
+          if (!autoBlockedRef.current && latestBankRef.current.some(isTarget)) setAutoKick((k) => k + 1);
+        }
+      }
+    })();
+  }, [allQuestions, autoKick]);
 
   const handleUpdateBankQuestions = (updated: StructuredQuestion[]) => {
     setAllQuestions(updated);
@@ -458,8 +532,17 @@ export default function Home() {
   }, [currentQuestions]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
-      <Navbar
+  <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
+    {autoProgress && (
+      <div
+        role="status"
+        aria-live="polite"
+        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-2rem)] px-4 py-2 rounded-full bg-sky-600 text-white text-xs font-bold shadow-lg"
+      >
+        {t("autoAnswersRunning", { done: autoProgress.done, total: autoProgress.total })}
+      </div>
+    )}
+    <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         questionCount={allQuestions.length}

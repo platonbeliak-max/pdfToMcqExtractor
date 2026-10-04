@@ -75,14 +75,14 @@ async function slot<T>(task: () => Promise<T>): Promise<T> {
 async function fetchBody(url: string): Promise<string | null> {
   const cached = cache.get(url);
   if (cached !== undefined) return cached;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     const outcome = await slot(async () => {
       try {
         const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(12_000) });
-        if (res.status === 429 || res.status === 503) return "retry" as const;
+        if (res.status === 429 || res.status >= 500) return "retry" as const;
         return res.ok ? await res.text() : null;
       } catch {
-        return null;
+        return "retry" as const;
       }
     });
     if (outcome !== "retry") {
@@ -111,6 +111,12 @@ async function getText(url: string): Promise<string> {
   return (await fetchBody(url)) ?? "";
 }
 
+class SourcesUnavailableError extends Error {
+  constructor() {
+    super("sources_unavailable");
+  }
+}
+
 interface WikiApiPage {
   title: string;
   extract?: string;
@@ -123,7 +129,8 @@ async function wikiSearch(lang: "ru" | "en", query: string, limit = 3): Promise<
   const found = await getJson<{ query?: { search?: { title: string }[] } }>(
     `${base}?${new URLSearchParams({ action: "query", list: "search", srsearch: query, srlimit: String(limit), format: "json", formatversion: "2" })}`,
   );
-  const titles = (found?.query?.search ?? []).map((x) => x.title);
+  if (found === null) throw new SourcesUnavailableError();
+  const titles = (found.query?.search ?? []).map((x) => x.title);
   if (titles.length === 0) return [];
 
   const data = await getJson<{ query?: { pages?: WikiApiPage[] } }>(
@@ -224,6 +231,12 @@ function quote(term: string): string {
   return `"${term.replace(/["()]/g, " ").replace(/\s+/g, " ").trim()}"`;
 }
 
+/** Papers say "sternocleidomastoid", not "sternocleidomastoid muscle", so drop the generic trailing noun. */
+function coreTerm(term: string): string {
+  const core = term.replace(/\s+(muscle|muscles|nerve|artery|vein|bone|ligament|gland)$/i, "").trim();
+  return core.length >= 4 ? core : term;
+}
+
 /** Index of the clear winner, or -1 when the top score is weak or ties with the runner-up. */
 function pickWinner(scores: number[], minTop: number, minMargin: number): number {
   let best = -1;
@@ -276,7 +289,13 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
   ]);
 
   const ownDocs = options.map((o, i) => optionDocLists[i]?.map((d) => matchesOption(o.text, d)).find(Boolean));
-  const questionEnglish = questionDocs.map((d) => d.englishTitle).find(Boolean);
+  const questionStemSet = new Set(questionStems);
+  const topicDoc = questionDocs
+    .filter((d) => d.englishTitle)
+    .map((d) => ({ d, fit: coverage(Array.from(new Set(stems(d.rawTitle))), questionStemSet) }))
+    .filter((x) => x.fit >= 0.6)
+    .sort((a, b) => b.fit - a.fit)[0]?.d;
+  const questionEnglish = topicDoc?.englishTitle;
   const optionEnglish = options.map((o, i) => ownDocs[i]?.englishTitle ?? (lang === "en" ? o.text : undefined));
 
   const [englishDocs, scientificDocs, ...hitCounts] = await Promise.all([
@@ -284,7 +303,9 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
     questionEnglish ? pubmedSearch(`${quote(questionEnglish)} anatomy`) : Promise.resolve([] as Doc[]),
     ...options.map((_, i) => {
       const en = optionEnglish[i];
-      return questionEnglish && en ? europePmcCount(`${quote(en)} AND ${quote(questionEnglish)}`) : Promise.resolve(0);
+      return questionEnglish && en
+        ? europePmcCount(`TITLE_ABS:${quote(en)} AND TITLE_ABS:${quote(coreTerm(questionEnglish))}`)
+        : Promise.resolve(0);
     }),
   ]);
 
@@ -325,14 +346,14 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
     const abstractText = scientificDocs.map((d) => d.text).join(" ");
     checks.push({
       label: "PubMed",
-      winner: pickWinner(options.map((_, i) => (optionEnglish[i] ? countPhrase(abstractText, optionEnglish[i]!) : 0)), 1, 1),
+      winner: pickWinner(options.map((_, i) => (optionEnglish[i] ? countPhrase(abstractText, optionEnglish[i]!) : 0)), 2, 2),
     });
   }
 
   if (hitCounts.some((n) => n > 0)) {
     checks.push({
       label: "Europe PMC",
-      winner: pickWinner(hitCounts as number[], 3, Math.max(2, Math.max(...(hitCounts as number[])) * 0.25)),
+      winner: pickWinner(hitCounts as number[], 8, Math.max(5, Math.max(...(hitCounts as number[])) * 0.4)),
     });
   }
 
@@ -342,7 +363,7 @@ async function choiceLookup(question: string, allOptions: { key: string; text: s
   });
   const ranked = [...votes.entries()].sort((a, b) => b[1].length - a[1].length);
   const top = ranked[0];
-  if (!top || (ranked[1] && ranked[1][1].length === top[1].length)) {
+  if (!top || ranked.length > 1 || top[1].length < 2) {
     return Response.json(
       { error: "no_answer", debug: { checks, questionEnglish, optionEnglish, hitCounts, own: ownDocs.map((d) => d?.rawTitle), q: questionDocs.map((d) => d.rawTitle) } },
       { status: 404 },
@@ -398,7 +419,7 @@ async function openLookup(question: string): Promise<Response> {
     keys: [],
     answerText: best.doc.rawTitle,
     explanation: ru
-      ? `Термин найден ${best.searches} из 3 независимых поисков по Википедии${scientific.length > 0 ? " и подтверждён публикациями PubMed" : ""}. Ответ подобран автоматически, без ИИ — проверьте формулировку по ссылкам.`
+      ? `Термин найден ${best.searches} из 3 независимых поисков по Википедии${scientific.length > 0 ? " и подтверждён публикациями PubMed" : ""}. Ответ подобран автоматически, без ИИ — проверьте формули��овку по ссылкам.`
       : `The term was found by ${best.searches} of 3 independent Wikipedia searches${scientific.length > 0 ? " and confirmed by PubMed" : ""}. Picked automatically, without AI — please verify via the links.`,
     confidence: confirmations >= 4 ? "high" : confirmations === 3 ? "medium" : "low",
     mode: "free",
@@ -415,6 +436,9 @@ export async function POST(req: Request) {
   try {
     return options.length > 0 ? await choiceLookup(question, options) : await openLookup(question);
   } catch (err) {
+    if (err instanceof SourcesUnavailableError) {
+      return Response.json({ error: "sources_unavailable" }, { status: 503 });
+    }
     console.error("[answer] lookup failed:", err);
     return Response.json({ error: "Lookup failed" }, { status: 502 });
   }

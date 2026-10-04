@@ -21,6 +21,12 @@ export class AiRateLimitError extends Error {
   }
 }
 
+export class NoAnswerError extends Error {
+  constructor() {
+    super("No source agreed on an answer");
+  }
+}
+
 const RATE_LIMIT_RETRIES = 3;
 const RATE_LIMIT_WAIT_MS = 10_000;
 
@@ -44,6 +50,7 @@ export async function lookupAiAnswer(q: StructuredQuestion): Promise<StructuredQ
   if (res.status === 500 && (await res.clone().json().catch(() => null))?.error === "missing_key") {
     throw new AiBillingError();
   }
+  if (res.status === 404) throw new NoAnswerError();
   if (!res.ok) throw new Error(`lookup failed (${res.status})`);
   const data = (await res.json()) as AiAnswerResponse;
 
@@ -62,7 +69,8 @@ export async function lookupAiAnswer(q: StructuredQuestion): Promise<StructuredQ
     aiSources: data.sources,
     aiConfidence: data.confidence,
     aiMode: data.mode ?? "ai",
-    status: "review",
+    aiTried: true,
+    status: data.confidence === "low" ? "review" : "verified",
     updatedAt: new Date().toISOString(),
   };
 }

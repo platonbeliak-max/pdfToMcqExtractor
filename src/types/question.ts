@@ -57,6 +57,7 @@ export interface StructuredQuestion {
   aiSources?: { title: string; url: string; kind?: "wikipedia" | "pubmed" | "europepmc" }[];
   aiConfidence?: "high" | "medium" | "low";
   aiMode?: "free" | "ai";
+  aiTried?: boolean;
   originalQuestion?: {
     text: string;
     options: QuestionOptionItem[];
