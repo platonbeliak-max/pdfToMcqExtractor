@@ -19,7 +19,10 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 // when the page is restored from the back/forward cache on phones.
 const loadUrl = async ([, id]: [string, string]) => {
   const blob = await getImage(id);
-  return blob ? blobToDataUrl(blob) : null;
+  if (blob) return blobToDataUrl(blob);
+  // Built-in banks ship their pictures as static files instead of IndexedDB entries.
+  const res = await fetch(`/banks/img/${encodeURIComponent(id)}.webp`);
+  return res.ok ? `/banks/img/${encodeURIComponent(id)}.webp` : null;
 };
 
 export function FigureImage({ imageId, className = "" }: { imageId: string; className?: string }) {

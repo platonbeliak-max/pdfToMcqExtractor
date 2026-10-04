@@ -31,6 +31,12 @@ for (const [pn, list] of byPage) {
     const p2 = c2.getImageData(0, 0, 32, 32).data; let fine = "";
     for (let i = 0; i < p2.length; i += 4) fine += Math.min(15, Math.floor((p2[i] * 0.299 + p2[i + 1] * 0.587 + p2[i + 2] * 0.114) / 16)).toString(16);
     res[figureKey(f)] = { imageId: pictureId(fine), hash: hex, fine } as any;
+    if (process.env.FIG_DIR) {
+      const k = Math.min(1, 1600 / Math.max(sw, sh));
+      const crop = createCanvas(Math.max(1, Math.round(sw * k)), Math.max(1, Math.round(sh * k)));
+      crop.getContext("2d").drawImage(c, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+      fs.writeFileSync(`${process.env.FIG_DIR}/${pictureId(fine)}.webp`, await crop.encode("webp", 80));
+    }
   }
   page.cleanup();
 }

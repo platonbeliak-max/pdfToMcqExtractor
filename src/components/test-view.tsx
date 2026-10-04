@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { StructuredQuestion, answerKeys, isFigureQuestion } from "@/types/question";
+import useSWR from "swr";
+import { StructuredQuestion, answerKeys, isFigureQuestion, type MatchingAnswer, type SequenceAnswer } from "@/types/question";
 import { useT } from "@/lib/i18n";
-import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
+import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb, Loader2 } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
 
@@ -14,9 +15,14 @@ interface TestItem {
   correct: string[];
   textAnswer: string;
   figure?: { imageId?: string; captions: string[] };
+  sequence?: SequenceAnswer;
+  matching?: MatchingAnswer;
+  /** Illustration shown above a regular (non-labelling) question. */
+  imageId?: string;
 }
 
-type Answer = { picked: string[]; typed: string; labels?: Record<string, string> };
+/** `slots` holds the chosen position number (sequence) or value (matching) per option key. */
+type Answer = { picked: string[]; typed: string; labels?: Record<string, string>; slots?: Record<string, string> };
 export type TestMode = "all" | "text" | "fig";
 
 const byNumber = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key, undefined, { numeric: true });
@@ -46,7 +52,12 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
       skipped++;
       continue;
     }
-    if (isFigureQuestion(q) && q.options.length >= 2) {
+    if (q.sequence || q.matching) {
+      pool.push({ id: q.id, text: q.question.text, options: q.options, correct: [], textAnswer: "", sequence: q.sequence, matching: q.matching, imageId: q.imageId });
+      continue;
+    }
+    // A picture with an answer key is an ordinary question illustrated by it; only unkeyed pictures are labelling tasks.
+    if (isFigureQuestion(q) && q.options.length >= 2 && (q.tags?.includes("figure") || !correct.length)) {
       const labels = [...q.options].sort(byNumber);
       pool.push({
         id: q.id,
@@ -58,13 +69,38 @@ function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped
       });
       continue;
     }
-    pool.push({ id: q.id, text: q.question.text, options: q.options, correct, textAnswer });
+    pool.push({ id: q.id, text: q.question.text, options: q.options, correct, textAnswer, imageId: q.imageId });
   }
   return { pool, skipped };
 }
 
+function expectedSlot(item: TestItem, key: string): string {
+  if (item.sequence) return String(item.sequence[key] ?? "");
+  return item.matching?.pairs[key] ?? "";
+}
+
+function slotRight(item: TestItem, a: Answer | undefined, key: string): boolean {
+  const chosen = a?.slots?.[key] ?? "";
+  if (!chosen) return false;
+  if (item.sequence) return chosen === expectedSlot(item, key);
+  return norm(chosen) === norm(expectedSlot(item, key));
+}
+
+function correctAnswerText(item: TestItem): string {
+  if (item.sequence)
+    return [...item.options]
+      .sort((x, y) => (item.sequence![x.key] ?? 99) - (item.sequence![y.key] ?? 99))
+      .map((o) => `${item.sequence![o.key]}) ${o.text}`)
+      .join("; ");
+  if (item.matching) return item.options.map((o) => `${o.text} → ${item.matching!.pairs[o.key]}`).join("; ");
+  if (item.figure) return item.options.map((o) => `${o.key} — ${o.text}`).join("; ");
+  if (item.correct.length) return item.options.filter((o) => item.correct.includes(o.key)).map((o) => o.text).join("; ");
+  return item.textAnswer;
+}
+
 function isRight(item: TestItem, a: Answer | undefined): boolean {
   if (!a) return false;
+  if (item.sequence || item.matching) return item.options.every((o) => slotRight(item, a, o.key));
   if (item.figure) return item.options.every((o) => textMatches(a.labels?.[o.key] ?? "", o.text));
   if (item.correct.length) {
     const p = [...a.picked].sort().join(",");
@@ -117,6 +153,19 @@ function textMatches(typed: string, expected: string): boolean {
   return editDistance(a, b) <= Math.floor(b.length / 6);
 }
 
+const BUILT_IN_BANKS = [
+  { id: "anatomy", label: "bankAnatomy" },
+  { id: "physiology", label: "bankPhysiology" },
+] as const;
+
+type Source = "mine" | (typeof BUILT_IN_BANKS)[number]["id"];
+
+const fetchBank = async (url: string): Promise<StructuredQuestion[]> => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return ((await res.json()) as { questions: StructuredQuestion[] }).questions;
+};
+
 export function TestView({
   questions,
   onGoUpload,
@@ -127,11 +176,85 @@ export function TestView({
   initialMode?: TestMode;
 }) {
   const { t } = useT();
+  const [source, setSource] = useState<Source>(() => (questions.some(hasAnswer) ? "mine" : "anatomy"));
+  const bank = useSWR(source === "mine" ? null : `/banks/${source}.json`, fetchBank, { revalidateOnFocus: false });
+
+  const picker = (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t("testSource")}</legend>
+      <div className="flex flex-wrap gap-2">
+        {[
+          { id: "mine" as Source, label: t("testSourceMine", { n: questions.filter(hasAnswer).length }) },
+          ...BUILT_IN_BANKS.map((b) => ({ id: b.id as Source, label: t(b.label) })),
+        ].map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            aria-pressed={source === s.id}
+            onClick={() => setSource(s.id)}
+            className={`px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${
+              source === s.id
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-blue-500"
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+
+  if (source !== "mine" && !bank.data) {
+    return (
+      <div className="max-w-xl mx-auto p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col gap-6">
+        {picker}
+        {bank.error ? (
+          <div className="flex flex-wrap items-center gap-3 text-sm text-red-700 dark:text-red-400">
+            <span>{t("testSourceError")}</span>
+            <button type="button" onClick={() => void bank.mutate()} className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-800 font-bold">
+              {t("figRetry")}
+            </button>
+          </div>
+        ) : (
+          <p role="status" className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+            {t("testSourceLoading")}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <TestRunner
+      key={source}
+      questions={source === "mine" ? questions : bank.data!}
+      onGoUpload={onGoUpload}
+      initialMode={initialMode}
+      picker={picker}
+    />
+  );
+}
+
+function TestRunner({
+  questions,
+  onGoUpload,
+  initialMode,
+  picker,
+}: {
+  questions: StructuredQuestion[];
+  onGoUpload: () => void;
+  initialMode: TestMode;
+  picker: React.ReactNode;
+}) {
+  const { t } = useT();
   const { pool: fullPool, skipped } = useMemo(() => buildPool(questions), [questions]);
   const [mode, setMode] = useState<TestMode>(initialMode);
-  const figCount = fullPool.filter((it) => it.figure).length;
+  const hasPicture = (it: TestItem) => !!(it.figure || it.imageId);
+  const figCount = fullPool.filter(hasPicture).length;
   const pool = useMemo(
-    () => fullPool.filter((it) => (mode === "all" ? true : mode === "fig" ? !!it.figure : !it.figure)),
+    () => fullPool.filter((it) => (mode === "all" ? true : mode === "fig" ? hasPicture(it) : !hasPicture(it))),
     [fullPool, mode],
   );
 
@@ -151,6 +274,7 @@ export function TestView({
       .slice(0, n)
       .map((it) => {
         if (it.figure) return { ...it, figure: { ...it.figure, captions: shuffle(it.figure.captions) } };
+        if (it.matching) return { ...it, options: shuffleOpts ? shuffle(it.options) : it.options, matching: { ...it.matching, choices: shuffle(it.matching.choices) } };
         return shuffleOpts ? { ...it, options: shuffle(it.options) } : it;
       });
     setItems(chosen);
@@ -165,6 +289,7 @@ export function TestView({
   if (fullPool.length === 0) {
     return (
       <div className="max-w-xl mx-auto p-10 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+        <div className="text-left mb-8">{picker}</div>
         <ClipboardList className="w-10 h-10 text-blue-600 mx-auto mb-3" />
         <h2 className="font-bold text-slate-900 dark:text-slate-100">{t("testEmptyT")}</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">{t("testEmptyD")}</p>
@@ -189,6 +314,8 @@ export function TestView({
             {skipped > 0 && " " + t("testSkipped", { n: skipped })}
           </p>
         </div>
+
+        {picker}
 
         <fieldset className="flex flex-col gap-2">
           <legend className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t("testMode")}</legend>
@@ -289,12 +416,7 @@ export function TestView({
               <div key={it.id} className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                 <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 leading-relaxed">{it.text}</p>
                 <p className="text-sm text-emerald-700 dark:text-emerald-400 mt-2 leading-relaxed">
-                  {t("correctAnswer")}:{" "}
-                  {it.figure
-                    ? it.options.map((o) => `${o.key} — ${o.text}`).join("; ")
-                    : it.correct.length
-                    ? it.options.filter((o) => it.correct.includes(o.key)).map((o) => o.text).join("; ")
-                    : it.textAnswer}
+                  {t("correctAnswer")}: {correctAnswerText(it)}
                 </p>
               </div>
             ))}
@@ -313,7 +435,12 @@ export function TestView({
     setRevealed({ ...revealed, [item.id]: true });
     setChecked(true);
   };
-  const canCheck = item.figure
+  const structured = !!(item.sequence || item.matching);
+  const setSlot = (key: string, value: string) =>
+    setAnswers({ ...answers, [item.id]: { ...ans, slots: { ...ans.slots, [key]: value } } });
+  const canCheck = structured
+    ? item.options.every((o) => ans.slots?.[o.key])
+    : item.figure
     ? item.options.some((o) => ans.labels?.[o.key]?.trim())
     : item.correct.length
       ? ans.picked.length > 0
@@ -352,8 +479,77 @@ export function TestView({
           <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
           {multi && <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">{t("testMulti", { n: item.correct.length })}</p>}
         </div>
+        {!item.figure && item.imageId && <FigureImage imageId={item.imageId} className="max-h-96 object-contain" />}
 
-        {item.figure ? (
+        {structured ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-bold text-blue-600 dark:text-blue-400">{item.sequence ? t("testSeqHint") : t("testMatchHint")}</p>
+            <ol className="flex flex-col gap-2">
+              {item.options.map((o) => {
+                const chosen = ans.slots?.[o.key] ?? "";
+                const ok = slotRight(item, ans, o.key);
+                const tone = !checked
+                  ? chosen
+                    ? "border-blue-600"
+                    : "border-slate-200 dark:border-slate-700"
+                  : ok
+                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40"
+                    : "border-red-500 bg-red-50 dark:bg-red-950/40";
+                const choices = item.sequence ? item.options.map((_, i) => String(i + 1)) : item.matching!.choices;
+                const taken = new Set(Object.entries(ans.slots ?? {}).filter(([k]) => k !== o.key).map(([, v]) => v));
+                return (
+                  <li
+                    key={o.key}
+                    className={`flex gap-3 p-3 rounded-2xl border-2 ${tone} ${item.sequence ? "items-center" : "flex-col sm:flex-row sm:flex-wrap sm:items-center"}`}
+                  >
+                    {item.sequence && (
+                      <select
+                        aria-label={t("testPosition", { s: o.text })}
+                        value={chosen}
+                        disabled={checked}
+                        onChange={(e) => setSlot(o.key, e.target.value)}
+                        className="w-16 shrink-0 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold text-slate-900 dark:text-slate-100 focus:border-blue-600 outline-none"
+                      >
+                        <option value="">{t("testPickNum")}</option>
+                        {choices.map((c) => (
+                          <option key={c} value={c}>
+                            {taken.has(c) ? `${c} ·` : c}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <span className="flex-1 text-sm leading-relaxed text-slate-800 dark:text-slate-200">{o.text}</span>
+                    {item.matching && (
+                      <select
+                        aria-label={t("testPosition", { s: o.text })}
+                        value={chosen}
+                        disabled={checked}
+                        onChange={(e) => setSlot(o.key, e.target.value)}
+                        className="w-full sm:w-64 shrink-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:border-blue-600 outline-none"
+                      >
+                        <option value="">{t("testPickMatch")}</option>
+                        {choices.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {checked && (
+                      <span className="inline-flex items-center gap-1.5 shrink-0 text-xs font-bold">
+                        {ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+                        {!ok && item.sequence && <span className="text-emerald-700 dark:text-emerald-400">{expectedSlot(item, o.key)}</span>}
+                      </span>
+                    )}
+                    {checked && !ok && item.matching && (
+                      <p className="basis-full text-xs font-bold text-emerald-700 dark:text-emerald-400 leading-relaxed">{expectedSlot(item, o.key)}</p>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        ) : item.figure ? (
           <div className="flex flex-col gap-4">
             {item.figure.imageId && <FigureImage imageId={item.figure.imageId} />}
             <div className="flex flex-wrap items-center justify-between gap-2">

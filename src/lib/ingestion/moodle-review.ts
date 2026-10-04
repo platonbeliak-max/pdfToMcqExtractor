@@ -808,7 +808,7 @@ interface Group {
 function keyOf(p: Parsed, picture: string): string {
   const stem = norm(p.stem);
   if (p.kind === "text") return `t|${stem}|${picture}`;
-  return `${p.kind}|${stem}|${p.options.map(norm).sort().join("¦")}|${picture}`;
+  return `${p.kind}|${stem}|${p.options.map(norm).sort().join("��")}|${picture}`;
 }
 
 function hamming(a: string, b: string): number {
@@ -931,11 +931,18 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
 
   if (base.kind === "order" || base.kind === "match") {
     const best = g.items.find((p) => p.complete) ?? mergeStructured(g.items, base);
+    const letterAt = (i: number) => LETTERS[i] ?? String(i + 1);
+    const optionMap = Object.fromEntries(best.options.map((t, i) => [letterAt(i), t]));
+    // A "matching" table whose right column is only position numbers ("[03]") is really an ordering task.
+    const numericPairs = base.kind === "match" && best.pairs.length > 1 && best.pairs.every((v) => !v || /^\[?\s*\d{1,2}\s*\]?$/.test(v));
+    const kind = numericPairs ? "order" : base.kind;
+    const order = numericPairs ? best.pairs.map((v) => (v ? Number(v.replace(/\D/g, "")) : null)) : best.order;
     let answerText: string | undefined;
     let complete = best.complete;
-    if (base.kind === "order") {
-      const order = best.order;
-      const rows = best.entries.map((e, i) => ({ text: e.text, n: order[i] }));
+    let sequence: Record<string, number> | undefined;
+    let matching: { pairs: Record<string, string>; choices: string[] } | undefined;
+    if (kind === "order") {
+      const rows = best.entries.map((e, i) => ({ key: letterAt(i), text: e.text, n: order[i] }));
       if (rows.some((r) => r.n !== null)) {
         answerText = rows
           .slice()
@@ -943,20 +950,31 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
           .map((r) => `${r.n ?? "?"}) ${r.text}`)
           .join("; ");
       }
-      complete = complete && new Set(order).size === order.length;
+      complete = complete && order.every((n) => n !== null) && new Set(order).size === order.length;
+      if (complete) sequence = Object.fromEntries(rows.map((r) => [r.key, r.n as number]));
     } else {
-      const rows = best.entries.map((e, i) => ({ text: e.text, v: best.pairs[i] }));
+      const rows = best.entries.map((e, i) => ({ key: letterAt(i), text: e.text, v: best.pairs[i] }));
       if (rows.some((r) => r.v)) answerText = rows.map((r) => `${r.text} → ${r.v ?? "?"}`).join("; ");
+      complete = complete && rows.every((r) => !!r.v);
+      if (complete) {
+        // Moodle prints only the chosen value per row, so the drop-down list is rebuilt from every value seen in any attempt.
+        const seen = new Map<string, string>();
+        for (const v of [...rows.map((r) => r.v as string), ...g.items.flatMap((p) => p.entries.map((e) => e.value))])
+          if (v && !seen.has(norm(v))) seen.set(norm(v), v);
+        matching = { pairs: Object.fromEntries(rows.map((r) => [r.key, r.v as string])), choices: [...seen.values()] };
+      }
     }
     const status: QuestionStatus = !answerText ? "missing_answer" : complete ? "answered" : "needs_review";
     return {
       ...common,
-      options: Object.fromEntries(best.options.map((t, i) => [LETTERS[i] ?? String(i + 1), t])),
+      options: optionMap,
       correctAnswer: null,
       answerText,
       confidence: confidenceOf(status, 1),
       status,
-      tags: [base.kind === "order" ? "ordering" : "matching"],
+      tags: [kind === "order" ? "ordering" : "matching"],
+      sequence,
+      matching,
       explanation: status === "needs_review" ? "Часть ответа не подтверждена баллом — проверьте" : undefined,
     };
   }
