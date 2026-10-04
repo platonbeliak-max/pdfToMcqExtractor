@@ -524,15 +524,90 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
   const { question, options } = parsed.data;
+  let free: Response | null = null;
   try {
-    return await budget.run({ deadline: Date.now() + REQUEST_BUDGET_MS }, () =>
+    free = await budget.run({ deadline: Date.now() + REQUEST_BUDGET_MS }, () =>
       options.length > 0 ? choiceLookup(question, options) : openLookup(question),
     );
   } catch (err) {
-    if (err instanceof SourcesUnavailableError) {
-      return Response.json({ error: "sources_unavailable" }, { status: 503 });
-    }
-    console.error("[answer] lookup failed:", err);
+    if (!(err instanceof SourcesUnavailableError)) console.error("[answer] free lookup failed:", err);
+  }
+  if (free?.ok) return free;
+
+  if (!process.env.GROQ_API_KEY) return Response.json({ error: "missing_key" }, { status: 500 });
+  try {
+    return Response.json(await aiLookup(question, options));
+  } catch (err) {
+    if (err instanceof AiRateLimited) return Response.json({ error: "rate_limited" }, { status: 429 });
+    console.error("[answer] AI fallback failed:", err);
     return Response.json({ error: "Lookup failed" }, { status: 502 });
   }
+}
+
+class AiRateLimited extends Error {}
+
+// Groq's free tier caps tokens per minute per model, so rotating models multiplies throughput.
+const GROQ_MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"];
+
+async function groqJson(system: string, prompt: string): Promise<unknown> {
+  for (const model of GROQ_MODELS) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
+      }),
+      signal: AbortSignal.timeout(25_000),
+    });
+    if (res.status === 429 || res.status === 503) continue;
+    if (!res.ok) throw new Error(`groq ${model} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = (await res.json()) as { choices: { message: { content: string } }[] };
+    const content = data.choices[0]?.message?.content ?? "";
+    return JSON.parse(content.slice(content.indexOf("{"), content.lastIndexOf("}") + 1));
+  }
+  throw new AiRateLimited();
+}
+
+const aiSchema = z.object({
+  keys: z.array(z.string()).describe("Keys of the correct options; empty when there are no options"),
+  answerText: z.string().describe("The answer itself: option text(s), or the word/term for open questions"),
+  explanation: z.string().describe("1–2 sentence justification in the question's language"),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+
+async function aiLookup(question: string, options: { key: string; text: string }[]) {
+  const ru = /[а-яё]/i.test(question);
+  const output = aiSchema.parse(
+    await groqJson(
+      "Ты — эксперт-преподаватель медицинского вуза (анатомия, топографическая анатомия, оперативная хирургия, физиология и т.д.). " +
+      "Всегда давай ответ — даже если вопрос распознан с шумом OCR или частично обрезан: опирайся на смысл и выбери наиболее вероятный ответ. " +
+      "Для вопросов с вариантами верни ключи всех правильных вариантов (может быть несколько). " +
+      "Для открытых вопросов и вопросов с пропуском верни короткое слово или термин, который нужно вписать. " +
+      "Если в формулировке уже содержится ответ (например «…называется канюля Люэра, в ответе указать эпоним»), верни именно это слово (Люэр). " +
+      "Для «Верно/Неверно» выбери соответствующий вариант. Отвечай на языке вопроса. " +
+      'Верни только JSON: {"keys": string[], "answerText": string, "explanation": string, "confidence": "high"|"medium"|"low"}.',
+      options.length > 0
+        ? `Вопрос: ${question}\n\nВарианты:\n${options.map((o) => `${o.key}) ${o.text}`).join("\n")}`
+        : `Вопрос (открытый, без вариантов): ${question}`,
+    ),
+  );
+  const valid = new Set(options.map((o) => o.key.toUpperCase()));
+  const keys = output.keys.map((k) => k.trim().toUpperCase().replace(/[^A-ZА-Я0-9]/g, "")).filter((k) => valid.has(k));
+  const answerText =
+    keys.length > 0 ? options.filter((o) => keys.includes(o.key.toUpperCase())).map((o) => o.text).join("; ") : output.answerText.trim();
+  if (!answerText) throw new Error("empty AI answer");
+  return {
+    keys,
+    answerText,
+    explanation: output.explanation + (ru ? " (Ответ ИИ — мед. источники не дали однозначного подтверждения.)" : " (AI answer — open sources were not conclusive.)"),
+    confidence: output.confidence,
+    mode: "ai" as const,
+    sources: [],
+  };
 }

@@ -58,6 +58,7 @@ export interface StructuredQuestion {
   aiConfidence?: "high" | "medium" | "low";
   aiMode?: "free" | "ai";
   aiTried?: boolean;
+  lookupVersion?: number;
   originalQuestion?: {
     text: string;
     options: QuestionOptionItem[];

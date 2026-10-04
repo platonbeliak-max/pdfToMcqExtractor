@@ -54,7 +54,7 @@ import {
 import confetti from "canvas-confetti";
 import { isScrambledBijoyText } from "@/lib/text-normalizer";
 import { hasAnswer } from "@/lib/answerable";
-import { lookupAiAnswer, NoAnswerError, AiBillingError, AiRateLimitError } from "@/lib/ai-answer";
+import { lookupAiAnswer, NoAnswerError, AiBillingError, AiRateLimitError, LOOKUP_VERSION } from "@/lib/ai-answer";
 
 const STORAGE_KEY = "pdf-mcq-saved-session";
 
@@ -143,9 +143,8 @@ export default function Home() {
     latestBankRef.current = allQuestions;
     const isTarget = (q: StructuredQuestion) =>
       !hasAnswer(q) &&
-      !q.aiTried &&
+      (q.lookupVersion ?? 0) < LOOKUP_VERSION &&
       !autoFailedRef.current.has(q.id) &&
-      !q.tags?.includes("unreadable") &&
       q.question.text.trim().length >= 3;
     if (autoRunningRef.current || autoBlockedRef.current) return;
     const queued = allQuestions.filter(isTarget).length;
@@ -175,7 +174,7 @@ export default function Home() {
           found++;
         } catch (err) {
           if (err instanceof NoAnswerError) {
-            commit({ ...target, aiTried: true });
+            commit({ ...target, aiTried: true, lookupVersion: LOOKUP_VERSION });
           } else if (err instanceof AiRateLimitError || err instanceof AiBillingError) {
             autoBlockedRef.current = true;
           } else {

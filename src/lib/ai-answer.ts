@@ -27,6 +27,9 @@ export class NoAnswerError extends Error {
   }
 }
 
+// Bumping this re-queues questions an older lookup gave up on.
+export const LOOKUP_VERSION = 2;
+
 const RATE_LIMIT_RETRIES = 3;
 const RATE_LIMIT_WAIT_MS = 10_000;
 
@@ -70,6 +73,7 @@ export async function lookupAiAnswer(q: StructuredQuestion): Promise<StructuredQ
     aiConfidence: data.confidence,
     aiMode: data.mode ?? "ai",
     aiTried: true,
+    lookupVersion: LOOKUP_VERSION,
     status: data.confidence === "low" ? "review" : "verified",
     updatedAt: new Date().toISOString(),
   };
