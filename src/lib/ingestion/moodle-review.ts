@@ -117,6 +117,9 @@ interface Parsed {
   text: string | null;
   wrongTexts: string[];
   selected: Set<number>;
+  /** Several inline blanks: confirmed value per blank (null = unknown) and values known to be wrong. */
+  blanks?: (string | null)[];
+  blankWrong?: string[][];
 }
 
 export const clean = (s: string) =>
@@ -147,6 +150,7 @@ const FEEDBACK_RE = /^⟪?\s*Правильн(?:ый|ые) ответ(?:ы)?\s*:
 const VERDICT_RE = /^(?:Ваш ответ (?:верный|неправильный|частично правильный)|Отзыв)\.?$/i;
 const ANSWER_RE = /^Ответ\s*:?\s*(.*)$/;
 const FIELD_RE = /^⟪(.*)⟫$/;
+const MATCH_STEM_RE = /Соотнесите|Сопоставьте|соответстви/i;
 const ORDER_FIELD_RE = /^⟪\s*\[?\s*(\d{1,2})\s*\]?\s*⟫$/;
 const LABEL_RE = /^[a-zа-я]\.\s*/i;
 
@@ -230,10 +234,11 @@ function newInstance(number: number, page: number, y: number): Instance {
 /** Course/test titles printed at the top of each attempt ("24. КОНТРОЛЬНЫЙ ТЕСТ. …"). */
 function isTitleRow(t: string): boolean {
   if (t.startsWith(SELECTED) || t.startsWith(UNSELECTED)) return false;
+  if (/^(?:\d{1,3}\.\s*)?(?:КОНТРОЛЬН\p{Lu}*|ИТОГОВ\p{Lu}*)\s+(?:ТЕСТ|ЗАНЯТИЕ)|Перейти на\.\.\.|^Студентам и курсантам\s*\//u.test(t)) return true;
   const letters = t.match(/\p{L}/gu) ?? [];
   if (letters.length < 20 || !/\p{Lu}{7,}/u.test(t)) return false;
-  const head = letters.slice(0, 25);
-  return head.filter((c) => c === c.toUpperCase() && c !== c.toLowerCase()).length / head.length >= 0.6;
+  if (t.includes("___")) return false;
+  return letters.filter((c) => c === c.toUpperCase() && c !== c.toLowerCase()).length / letters.length >= 0.6;
 }
 
 function markOf(row: Row): Mark {
@@ -289,6 +294,12 @@ function readInstances(pages: PageInput[]): Instance[] {
         inHeader = false;
       }
       if (META_RE.test(t) || isTitleRow(t)) {
+        // A new attempt's summary: anything above it on this page (the course title) is not part of the previous question.
+        if (q && /^Тест начат/.test(t)) {
+          const above = (r: Row) => !(r.page === row.page && r.y < row.y);
+          q.rows = q.rows.filter(above);
+          q.body = q.body.filter(above);
+        }
         q = null;
         continue;
       }
@@ -435,29 +446,116 @@ function rightColumnX(rows: Row[], entries: number): number {
   return Math.min(...candidates.filter((c) => c >= (median(candidates) ?? 0) - 40));
 }
 
+/**
+ * Inline blanks ("Сонным бугорком называется ⟪передний⟫ бугорок ⟪поперечного⟫ …",
+ * labelled pictures "1. ⟪…⟫ мышца 2. ⟪…⟫"). Unlike a matching table, the fields sit
+ * inside the sentence: text follows them on the same line, or they stand on their own line.
+ */
+const isSideText = (s: string) => {
+  const t = clean(s);
+  return SCORE_RE.test(t) || MAX_RE.test(t) || /^из$/.test(t) || STATE_RE.test(t);
+};
+
+function clozeOf(rows: Row[]): FillInfo | null {
+  const ordered = rows.flatMap((r) => r.items.slice().sort((a, b) => a.x - b.x));
+  if (ordered.some((i) => ORDER_FIELD_RE.test(i.str.trim()))) return null;
+  const fieldRows = rows.filter((r) => r.items.some(isField));
+  let inline = 0;
+  let alone = 0;
+  for (const r of fieldRows) {
+    const words = r.items.filter((i) => !isGlyph(i)).sort((a, b) => a.x - b.x);
+    const fIdx = words.findIndex(isField);
+    if (words.slice(fIdx + 1).some((i) => !isField(i))) inline++;
+    else if (fIdx === 0) alone++;
+  }
+  if (!inline && alone * 2 <= fieldRows.length) return null;
+  const fieldCount = ordered.filter(isField).length;
+  const marked = rows.some((r) => markOf(r) !== null);
+  // Matching tables with wrapped left cells look inline too; they carry one ✓/✗ per row, cloze in these files does not.
+  if (fieldCount > 1 && (marked || MATCH_STEM_RE.test(rows.map((r) => r.text).join(" ")))) return null;
+  const blanks: string[] = [];
+  const marks: Mark[] = [];
+  const parts: string[] = [];
+  const ys: number[] = [];
+  for (const i of ordered) {
+    if (isField(i) && isSideText(FIELD_RE.exec(i.str.trim())![1])) continue;
+    if (isField(i)) {
+      blanks.push(clean(FIELD_RE.exec(i.str.trim())![1]));
+      ys.push(i.y + i.h / 2);
+      marks.push(null);
+      parts.push("___");
+    } else if (isGlyph(i)) {
+      const m = i.str.includes(CROSS) ? "incorrect" : i.str.includes(CHECK) ? "correct" : null;
+      if (m && marks.length && marks[marks.length - 1] === null) marks[marks.length - 1] = m;
+    } else parts.push(i.str);
+  }
+  return { text: clean(parts.join(" ")), value: blanks.join(" "), mark: marks.length === 1 ? marks[0] : null, blanks, marks, ys };
+}
+
+/** Matching printed without drop-down boxes: "удаление слюнной железы   cиалэктомия". Only trusted with full score. */
+function plainMatch(q: Instance): Structured | null {
+  if (!isFull(q)) return null;
+  const rows = q.body;
+  if (rows.length < 3) return null;
+  const stemX = rows[0].x;
+  let start = rows.length;
+  while (start > 1 && rows[start - 1].x >= stemX + 0.3) start--;
+  const tail = rows.slice(start);
+  if (tail.length < 2) return null;
+  let rightX = rightColumnX(tail, tail.length);
+  if (!Number.isFinite(rightX)) {
+    const shared = wordItems(tail[0])
+      .slice(1)
+      .map((i) => i.x)
+      .filter((x) => tail.every((r) => wordItems(r).slice(1).some((i) => Math.abs(i.x - x) < 3)));
+    if (!shared.length) return null;
+    rightX = Math.max(...shared);
+  }
+  const entries: Entry[] = [];
+  for (const r of tail) {
+    const w = wordItems(r);
+    const left = clean(w.filter((i) => i.x < rightX - 2).map((i) => i.str).join(" "));
+    const right = clean(w.filter((i) => i.x >= rightX - 2).map((i) => i.str).join(" "));
+    if (!left || !right) return null;
+    entries.push({ text: left, value: right, mark: null, y: r.y, page: r.page, override: null });
+  }
+  return { kind: "match", stem: rows.slice(0, start), entries };
+}
+
+interface FillInfo {
+  text: string;
+  value: string;
+  mark: Mark;
+  blanks?: string[];
+  marks?: Mark[];
+  ys?: number[];
+}
+
 interface Structured {
   kind: "order" | "match" | "fill" | null;
   stem: Row[];
   entries: Entry[];
-  fill?: { text: string; value: string; mark: Mark };
+  fill?: FillInfo;
 }
 
 /**
  * Matching, ordering and fill-in rows. Moodle prints one ✓/✗ icon after each
  * answered row, so the icons are the row terminators; the row's value is its
- * drop-down field (⟪…⟫) or, for plain tables, the right-hand column.
+ * drop-down field (⟪��⟫) or, for plain tables, the right-hand column.
  */
 function parseStructured(q: Instance): Structured {
   const rows = q.body;
   const hasFields = rows.some((r) => r.items.some(isField));
   const hasMarks = rows.some((r) => markOf(r) !== null);
-  if (!hasFields && !hasMarks) return { kind: null, stem: rows, entries: [] };
+  if (!hasFields && !hasMarks) return plainMatch(q) ?? { kind: null, stem: rows, entries: [] };
+  const cloze = hasFields ? clozeOf(rows) : null;
+  if (cloze) return { kind: "fill", stem: [], entries: [], fill: cloze };
 
   const firstIdx = rows.findIndex((r) => r.items.some(isField) || markOf(r) !== null);
   const stemX = rows[0]?.x ?? 0;
   let start = firstIdx;
   if (!rows[firstIdx].items.some(isField) || rows[firstIdx].items.length === 1) {
-    while (start > 0 && rows[start - 1].x >= stemX + 0.6 && rows[start - 1].page === rows[firstIdx].page && rows[firstIdx].y - rows[start - 1].bottom < 30) start--;
+    while (start > 0 && rows[start - 1].x >= stemX + 0.3 && rows[start - 1].page === rows[firstIdx].page && rows[firstIdx].y - rows[start - 1].bottom < 30) start--;
   }
   const stem = rows.slice(0, start);
   const tail = rows.slice(start);
@@ -600,6 +698,25 @@ function interpret(q: Instance): Parsed {
     const f = structured.fill;
     const p: Parsed = { ...base, kind: "text", stem: f.text };
     const notes = q.notes.map(clean).filter(Boolean);
+    const overrides = new Map<number, string>();
+    if (f.blanks && f.ys)
+      for (const n of noteBoxes(q)) {
+        const best = f.ys.map((y, i) => ({ i, d: Math.abs(y - n.y) })).sort((a, b) => a.d - b.d)[0];
+        if (best && best.d < 20 && n.text.trim()) overrides.set(best.i, clean(n.text));
+      }
+    if (f.blanks && f.blanks.length > 1 && !q.feedback && (!notes.length || overrides.size)) {
+      const n = f.blanks.length;
+      // A partial score with exactly the hand-corrected blanks wrong confirms every other blank.
+      const restConfirmed = overrides.size > 0 && q.earned !== null && !!q.max && Math.round((q.earned / q.max) * n) === n - overrides.size;
+      const full = isFull(q) || restConfirmed;
+      const zero = isZero(q);
+      p.blanks = f.blanks.map((v, i) => overrides.get(i) ?? (v && (full || f.marks![i] === "correct") ? v : null));
+      p.blankWrong = f.blanks.map((v, i) => (v && (f.marks![i] === "incorrect" || (zero && f.marks![i] !== "correct")) ? [v] : []));
+      p.complete = p.blanks.every((v) => v !== null);
+      p.text = p.complete ? fillBlanks(f.text, p.blanks) : null;
+      if (!p.complete && !p.blanks.some((v) => v !== null) && !zero && f.value) p.text = fillBlanks(f.text, f.blanks);
+      return p;
+    }
     if (notes.length) {
       p.text = notes.join(" ");
       p.complete = true;
@@ -614,6 +731,7 @@ function interpret(q: Instance): Parsed {
     return p;
   }
   if (structured.kind === "order" || structured.kind === "match") {
+    const kind = structured.kind;
     const stem = clean(structured.stem.map((r) => r.text).join(" "));
     const entries = structured.entries;
     const notes = noteBoxes(q);
@@ -623,12 +741,12 @@ function interpret(q: Instance): Parsed {
         .sort((a, b) => a.d - b.d)[0];
       if (target && target.d < 20) target.e.override = n.text.trim();
     }
-    const p: Parsed = { ...base, kind: structured.kind, stem, entries, options: entries.map((e) => e.text) };
+    const p: Parsed = { ...base, kind, stem, entries, options: entries.map((e) => e.text) };
     const values = entries.map((e) => e.value);
-    let known: (string | null)[] = entries.map((e) => (e.override ? normalizeValue(e.override, structured.kind!) : isFull(q) || e.mark === "correct" ? e.value : null));
+    let known: (string | null)[] = entries.map((e) => (e.override ? normalizeValue(e.override, kind) : isFull(q) || e.mark === "correct" ? e.value : null));
     if (!entries.some((e) => e.override)) known = solveRemaining(values, entries, known);
     p.complete = known.every((v) => v !== null && v !== "");
-    if (structured.kind === "order") p.order = known.map((v) => (v ? Number(v) : null));
+    if (kind === "order") p.order = known.map((v) => (v ? Number(v) : null));
     else p.pairs = known;
     return p;
   }
@@ -654,6 +772,14 @@ function interpret(q: Instance): Parsed {
   } else if (response && isZero(q)) p.wrongTexts.push(response);
   else if (response) p.text = response;
   return p;
+}
+
+function fillBlanks(template: string, values: (string | null)[]): string {
+  let k = 0;
+  return template.replace(/___/g, () => {
+    const v = values[k++];
+    return v ? `«${v}»` : "___";
+  });
 }
 
 function normalizeValue(v: string, kind: "order" | "match"): string {
@@ -835,6 +961,17 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
     };
   }
 
+  const blankItems = g.items.filter((p) => p.blanks);
+  if (blankItems.length && !g.items.some((p) => !p.blanks && p.complete && p.text)) {
+    const n = Math.max(...blankItems.map((p) => p.blanks!.length));
+    const merged: (string | null)[] = Array.from({ length: n }, (_, i) => blankItems.map((p) => p.blanks![i]).find((v) => v) ?? null);
+    const known = merged.filter((v) => v !== null).length;
+    const answerText = known ? fillBlanks(base.stem, merged) : (blankItems.find((p) => p.text)?.text ?? undefined);
+    const status: QuestionStatus = known === n ? "answered" : answerText ? "needs_review" : "missing_answer";
+    const note = status === "answered" ? undefined : known ? `Подтверждено ${known} из ${n} пропусков — проверьте остальные` : answerText ? "Ответ студента без подтверждения баллом — проверьте" : undefined;
+    return { ...common, options: {}, correctAnswer: null, answerText, confidence: confidenceOf(status, 1), status, explanation: note };
+  }
+
   const confirmed = g.items.filter((p) => p.complete && p.text);
   const counts = new Map<string, { text: string; n: number }>();
   for (const p of confirmed) {
@@ -853,6 +990,11 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
       status = "needs_review";
       note = "Ответ студента без подтверждения баллом — проверьте";
     } else if (wrong.size) note = `Неверный ответ в файле: ${g.items.flatMap((p) => p.wrongTexts)[0]}`;
+    else if (!base.stem.includes("___") && g.items.some((p) => isFull(p.inst))) {
+      text = base.stem;
+      status = "needs_review";
+      note = "Поля ввода не видны в файле: ответ вписан в текст вопроса (засчитан полностью) — выделите его";
+    }
   }
   return { ...common, options: {}, correctAnswer: null, answerText: text, confidence: confidenceOf(status, 1), status, explanation: note };
 }
@@ -860,15 +1002,60 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
 function mergeStructured(items: Parsed[], base: Parsed): Parsed {
   const merged = { ...base, order: base.order.slice(), pairs: base.pairs.slice() };
   for (const p of items) {
+    const taken = new Set<number>();
     p.entries.forEach((e, i) => {
-      const j = base.entries.findIndex((b) => norm(b.text) === norm(e.text));
+      const j = base.entries.findIndex((b, k) => !taken.has(k) && norm(b.text) === norm(e.text));
       if (j < 0) return;
+      taken.add(j);
       if (base.kind === "order" && merged.order[j] === null && p.order[i] !== null) merged.order[j] = p.order[i];
       if (base.kind === "match" && !merged.pairs[j] && p.pairs[i]) merged.pairs[j] = p.pairs[i];
     });
   }
   merged.complete = base.kind === "order" ? merged.order.every((v) => v !== null) : merged.pairs.every((v) => !!v);
   return merged;
+}
+
+/**
+ * Some printouts draw fill-in answers without their input boxes, so the attempt reads as one
+ * plain sentence ("Сонным бугорком называется передний бугорок поперечного отростка С6.").
+ * Such a sentence is matched against the blank templates of boxed attempts of the same
+ * question; the words in the blanks' places are that attempt's answers.
+ */
+function adoptUnboxedAttempts(groups: Map<string, Group>) {
+  const templates = [...groups.values()].filter((g) => g.first.kind === "text" && g.first.stem.includes("___"));
+  if (!templates.length) return;
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+  const patterns = templates.map((t) => {
+    const parts = clean(t.first.stem.replace(/[«»]/g, "")).split(/\s*___\s*/);
+    return { t, n: parts.length - 1, re: new RegExp(`^${parts.map(esc).join("\\s*(\\S.*?)\\s*")}\\.?$`, "iu") };
+  });
+  for (const [key, g] of groups) {
+    if (g.first.kind !== "text" || g.first.stem.includes("___") || g.items.some((p) => p.complete)) continue;
+    const text = clean(g.first.stem);
+    const hit = patterns.map((p) => ({ p, m: p.re.exec(text) })).find((x) => x.m && x.m.slice(1).every((v) => v && v.length <= 60));
+    if (!hit) continue;
+    const values = hit.m!.slice(1).map(clean);
+    const target = hit.p.t;
+    for (const item of g.items) {
+      const full = isFull(item.inst);
+      const adopted: Parsed = { ...item, stem: target.first.stem };
+      if (hit.p.n === 1) {
+        adopted.text = values[0];
+        adopted.complete = full;
+        if (!full && isZero(item.inst)) {
+          adopted.text = null;
+          adopted.wrongTexts = [values[0]];
+        }
+      } else {
+        adopted.blanks = values.map((v) => (full ? v : null));
+        adopted.blankWrong = values.map(() => []);
+        adopted.complete = full;
+        adopted.text = full ? fillBlanks(target.first.stem, values) : null;
+      }
+      target.items.push(adopted);
+    }
+    groups.delete(key);
+  }
 }
 
 export interface MoodleReviewResult {
@@ -895,9 +1082,10 @@ export function parseMoodleReview(pages: PageInput[], renders: Map<string, Figur
     if (g) g.items.push(p);
     else groups.set(k, { key: k, first: p, items: [p], imageId: pics[0]?.imageId });
   }
+  adoptUnboxedAttempts(groups);
   const questions = [...groups.values()].map((g, i) => ({ ...resolveGroup(g, i), ...(g.imageId ? { imageId: g.imageId } : {}) }));
   return { questions, totalFound: parsed.length, pagesUsed: new Set(instances.flatMap((q) => q.rows.map((r) => r.page))) };
 }
 
 /** Exposed for the audit scripts. */
-export const __internals = { readInstances, interpret, annotate, rowsOf, sideColumnCut, attachFigures };
+export const __internals = { readInstances, interpret, annotate, rowsOf, sideColumnCut, attachFigures, parseStructured };
