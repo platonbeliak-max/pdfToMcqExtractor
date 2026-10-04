@@ -231,6 +231,24 @@ function resolveCanonical(w: CanonicalSeed, members: QuestionInstance[]): Canoni
     reasons.push(uncertain.length ? `${uncertain.length} вариант(ов) без доказательств` : "Все варианты определены по совокупности попыток");
   }
 
+  // A partial score proves the student's picks were mostly right, so with nothing better the picks that no
+  // other attempt refuted become a provisional answer. It stays flagged for review.
+  if (!correctKeys.length && !conflicts.length && multiType) {
+    const picked = new Set<string>();
+    for (const m of members) {
+      if (m.score?.kind !== "PARTIAL_SCORE") continue;
+      const ids = new Set(m.answer.selectedOptionIds);
+      for (const o of options) if (o.instanceOptionIds.some((id) => ids.has(id))) picked.add(o.key);
+    }
+    const provisional = options.filter((o) => picked.has(o.key) && o.incorrectVotes === 0).map((o) => o.key);
+    if (provisional.length) {
+      correctKeys = provisional;
+      status = "NEEDS_REVIEW";
+      confidence = 0.4;
+      reasons.push("Частичный балл: показаны выбранные варианты, набор может быть неполным");
+    }
+  }
+
   const ordering = members.find((m) => m.answer.correctOrder)?.answer.correctOrder ?? null;
   const correctOrder = ordering
     ? ordering.map((id) => options.find((o) => o.instanceOptionIds.includes(id))?.key).filter((k): k is string => !!k)
