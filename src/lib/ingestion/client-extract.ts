@@ -106,8 +106,10 @@ function controlsToItems(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
     const cy = o.y + o.h / 2;
     const hasLabel = text.some((t) => t.x > o.x + o.w - 1 && t.x - (o.x + o.w) < 30 && t.y <= cy && t.y + t.h >= cy);
     if (!hasLabel) continue;
+    // Selected = a smaller mark inside the box: a filled dot/square, or (Chrome
+    // print of Moodle 4) a check tick drawn as a stroked polyline.
     const filled = shapes.some(
-      (s) => s !== o && s.filled && s.w <= o.w * 0.8 && s.w >= o.w * 0.25 && s.x >= o.x - 0.5 && s.y >= o.y - 0.5 && s.x + s.w <= o.x + o.w + 0.5 && s.y + s.h <= o.y + o.h + 0.5,
+      (s) => s !== o && s.w <= o.w * 0.8 && s.w >= o.w * 0.25 && s.x >= o.x - 0.5 && s.y >= o.y - 0.5 && s.x + s.w <= o.x + o.w + 0.5 && s.y + s.h <= o.y + o.h + 0.5,
     );
     // Align the glyph with the row's text baseline so layout puts it on the option line.
     const row = text.find((t) => t.x > o.x && t.x - (o.x + o.w) < 30 && t.y <= cy && t.y + t.h >= cy);

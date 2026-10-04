@@ -632,7 +632,7 @@ async function openLookup(question: string): Promise<Response> {
     keys: [],
     answerText: best.doc.rawTitle,
     explanation: ru
-      ? `Термин найден ${best.searches} из 3 независимых поисков по Википедии${scientific.length > 0 ? " и подтверждён публикациями PubMed" : ""}. Ответ подобран автоматически, без ИИ ��� проверьте формули��овку по ссылкам.`
+      ? `Термин найден ${best.searches} из 3 независимых поисков по Википедии${scientific.length > 0 ? " и подтверждён публикациями PubMed" : ""}. Ответ подобран автоматически, без ИИ — проверьте формулировку по ссылкам.`
       : `The term was found by ${best.searches} of 3 independent Wikipedia searches${scientific.length > 0 ? " and confirmed by PubMed" : ""}. Picked automatically, without AI — please verify via the links.`,
     confidence: confirmations >= 4 ? "high" : confirmations === 3 ? "medium" : "low",
     mode: "free",
