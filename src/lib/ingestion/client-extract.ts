@@ -125,7 +125,7 @@ function controlsToItems(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
  * separate the student's response from the question stem.
  */
 function markAnswerFields(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
-  const boxes = shapes.filter((s) => s.filled && s.h >= 10 && s.h <= 32 && s.w >= 30 && s.w <= 460);
+  const boxes = shapes.filter((s) => s.filled && s.h >= 10 && s.h <= 44 && s.w >= 30 && s.w <= 460);
   const same = (a: Shape, b: Shape) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Math.abs(a.w - b.w) < 3;
   const abuts = (a: Shape, b: Shape) =>
     !same(a, b) &&

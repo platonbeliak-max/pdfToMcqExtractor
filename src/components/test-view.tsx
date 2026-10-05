@@ -97,8 +97,24 @@ function correctAnswerText(item: TestItem): string {
   return item.textAnswer;
 }
 
+const BLANK = /_{2,}|…{2,}|\.{4,}/g;
+
+function blankAnswers(item: TestItem): string[] | null {
+  if (item.correct.length || item.figure || item.sequence || item.matching) return null;
+  const count = (item.text.match(BLANK) ?? []).length;
+  if (!count || !item.textAnswer) return null;
+  const quoted = [...item.textAnswer.matchAll(/«([^»]+)»|"([^"]+)"|“([^”]+)”/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim());
+  if (quoted.length === count) return quoted;
+  const parts = item.textAnswer.split(/\s*[;,]\s*/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length === count) return parts;
+  if (count === 1 && !quoted.length) return [item.textAnswer.trim()];
+  return null;
+}
+
 function isRight(item: TestItem, a: Answer | undefined): boolean {
   if (!a) return false;
+  const blanks = blankAnswers(item);
+  if (blanks) return blanks.every((w, i) => textMatches(a.labels?.[`b${i}`] ?? "", w));
   if (item.sequence || item.matching) return item.options.every((o) => slotRight(item, a, o.key));
   if (item.figure) return item.options.every((o) => textMatches(a.labels?.[o.key] ?? "", o.text));
   if (item.correct.length) {
@@ -363,9 +379,15 @@ function TestRunner({
     setChecked(true);
   };
   const structured = !!(item.sequence || item.matching);
+  const blanks = blankAnswers(item);
   const setSlot = (key: string, value: string) =>
     setAnswers({ ...answers, [item.id]: { ...ans, slots: { ...ans.slots, [key]: value } } });
-  const canCheck = structured
+  const setBlank = (i: number, value: string) =>
+    setAnswers({ ...answers, [item.id]: { ...ans, labels: { ...ans.labels, [`b${i}`]: value } } });
+  const textParts = blanks ? item.text.split(BLANK) : [];
+  const canCheck = blanks
+    ? blanks.every((_, i) => ans.labels?.[`b${i}`]?.trim())
+    : structured
     ? item.options.every((o) => ans.slots?.[o.key])
     : item.figure
     ? item.options.some((o) => ans.labels?.[o.key]?.trim())
@@ -403,8 +425,58 @@ function TestRunner({
 
       <div className="p-5 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col gap-5">
         <div>
-          <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
-          {multi && <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">{t("testMulti", { n: item.correct.length })}</p>}
+          {blanks ? (
+            <>
+              <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-3">{t("testBlankHint")}</p>
+              <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-loose text-pretty">
+                {textParts.map((part, i) => {
+                  if (i === textParts.length - 1) return <span key={i}>{part}</span>;
+                  const value = ans.labels?.[`b${i}`] ?? "";
+                  const ok = checked && textMatches(value, blanks[i]);
+                  const tone = !checked
+                    ? "border-blue-500 focus:border-blue-600"
+                    : ok
+                      ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100"
+                      : "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100";
+                  return (
+                    <span key={i}>
+                      {part}
+                      <span className="inline-flex flex-col align-middle mx-1 my-1">
+                        <input
+                          id={`blank-${i}`}
+                          aria-label={t("testBlank", { n: i + 1 })}
+                          autoComplete="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          value={value}
+                          disabled={checked}
+                          onChange={(e) => setBlank(i, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return;
+                            e.preventDefault();
+                            if (checked) return next();
+                            const nextInput = document.getElementById(`blank-${i + 1}`);
+                            if (nextInput) nextInput.focus();
+                            else if (canCheck) setChecked(true);
+                          }}
+                          style={{ width: `${Math.max(6, Math.min(16, blanks[i].length + 2))}ch` }}
+                          className={`min-h-11 px-2 py-1 rounded-lg border-2 bg-transparent text-base font-semibold text-slate-900 dark:text-slate-100 outline-none ${tone}`}
+                        />
+                        {checked && !ok && <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 leading-tight mt-0.5">{blanks[i]}</span>}
+                      </span>
+                    </span>
+                  );
+                })}
+              </p>
+            </>
+          ) : (
+            <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
+          )}
+          {multi && (
+            <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">
+              {t("testMulti", { n: item.correct.length })} · {t("testMultiPicked", { k: ans.picked.length, n: item.correct.length })}
+            </p>
+          )}
         </div>
         {!item.figure && item.imageId && <FigureImage imageId={item.imageId} className="max-h-96 object-contain" />}
 
@@ -563,7 +635,9 @@ function TestRunner({
               const isCorrect = item.correct.includes(o.key);
               let cls = "border-slate-200 dark:border-slate-700 hover:border-blue-500 text-slate-800 dark:text-slate-200";
               if (!checked && picked) cls = "border-blue-600 bg-blue-50 dark:bg-blue-950/40 text-slate-900 dark:text-slate-100";
+              const missed = checked && isCorrect && !picked;
               if (checked && isCorrect) cls = "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100";
+              if (missed) cls = "border-dashed border-amber-500 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100";
               if (checked && picked && !isCorrect) cls = "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100";
               return (
                 <button
@@ -576,13 +650,14 @@ function TestRunner({
                 >
                   <span className={`mt-0.5 w-4 h-4 shrink-0 border-2 ${multi ? "rounded" : "rounded-full"} ${picked ? "bg-current border-current" : "border-slate-400"}`} aria-hidden="true" />
                   <span className="text-sm leading-relaxed">{o.text}</span>
-                  {checked && isCorrect && <CheckCircle2 className="w-4 h-4 ml-auto shrink-0 text-emerald-600" />}
+                  {missed && <span className="ml-auto shrink-0 text-xs font-bold text-amber-700 dark:text-amber-400">{t("testMissed")}</span>}
+                  {checked && isCorrect && !missed && <CheckCircle2 className="w-4 h-4 ml-auto shrink-0 text-emerald-600" />}
                   {checked && picked && !isCorrect && <XCircle className="w-4 h-4 ml-auto shrink-0 text-red-600" />}
                 </button>
               );
             })}
           </div>
-        ) : (
+        ) : blanks ? null : (
           <div className="flex flex-col gap-2">
             <label htmlFor="typed" className="text-sm font-bold text-slate-700 dark:text-slate-300">{t("answer")}</label>
             <input

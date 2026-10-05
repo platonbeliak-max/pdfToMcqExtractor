@@ -228,6 +228,27 @@ export async function extractWithEngine(
   data: ArrayBuffer,
   opts: { ocr?: "auto" | "force" | "off"; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<{ questions: MCQQuestion[]; pageCount: number; totalFound: number }> {
+  const part = await extractDocumentPart(data, 0, opts);
+  const { questions: textQs, totalFound } = buildQuestions(part.instances);
+  const questions = [...textQs, ...part.figureQs].map((q, i) => ({ ...q, number: i + 1 }));
+  return { questions, pageCount: part.pageCount, totalFound: totalFound + part.figureQs.length };
+}
+
+export interface DocumentPart {
+  instances: QuestionInstance[];
+  figureQs: MCQQuestion[];
+  pageCount: number;
+}
+
+// Keeps instances from different files apart in ids and ordering while letting `aggregate` merge them.
+const FILE_SEQUENCE_STRIDE = 1_000_000;
+
+/** Reads one PDF into raw question instances (figure-caption noise already removed) plus figure questions. */
+export async function extractDocumentPart(
+  data: ArrayBuffer,
+  fileIndex: number,
+  opts: { ocr?: "auto" | "force" | "off"; onProgress?: (done: number, total: number) => void } = {},
+): Promise<DocumentPart> {
   const [{ openPdf, extractPages, renderRegion }, { analyzeDocument }, { putImage }] = await Promise.all([
     import("./client-extract"),
     import("./pipeline"),
@@ -262,11 +283,46 @@ export async function extractWithEngine(
   }
   await doc.cleanup?.();
 
-  const analysis = analyzeDocument(pages, { documentId: "local" });
-  const { questions: textQs, totalFound } = buildQuestions(analysis.instances);
+  const analysis = analyzeDocument(pages, { documentId: `file-${fileIndex}` });
   const isFigureNoise = figureNoise(drafts);
-  const questions = [...textQs.filter((q) => !isFigureNoise(q)), ...figureQs].map((q, i) => ({ ...q, number: i + 1 }));
-  return { questions, pageCount: doc.numPages, totalFound: totalFound + drafts.length };
+  const instances = analysis.instances
+    .filter(
+      (i) =>
+        !isFigureNoise({
+          question: i.stem,
+          options: Object.fromEntries(i.options.map((o) => [o.id, o.text])),
+          pageNumber: i.physicalPage,
+        }),
+    )
+    .map((i) => ({ ...i, id: `f${fileIndex}:${i.id}`, sequence: fileIndex * FILE_SEQUENCE_STRIDE + i.sequence }));
+  return { instances, figureQs, pageCount: doc.numPages };
+}
+
+const figureKey = (q: MCQQuestion) =>
+  Object.values(q.options)
+    .map((v) => v.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim())
+    .sort()
+    .join("|");
+
+/**
+ * Merges several files into one bank: instances from every file are aggregated together, so a
+ * question repeated across files becomes a single question and pools answer evidence from all of them.
+ */
+export function mergeDocumentParts(parts: DocumentPart[]): { questions: MCQQuestion[]; totalFound: number } {
+  const instances = parts.flatMap((p) => p.instances);
+  const { questions: textQs, totalFound } = buildQuestions(instances);
+  const seenFigures = new Set<string>();
+  const figureQs = parts
+    .flatMap((p) => p.figureQs)
+    .filter((q) => {
+      const key = figureKey(q);
+      if (!key) return true;
+      if (seenFigures.has(key)) return false;
+      seenFigures.add(key);
+      return true;
+    });
+  const questions = [...textQs, ...figureQs].map((q, i) => ({ ...q, number: i + 1 }));
+  return { questions, totalFound: totalFound + parts.reduce((s, p) => s + p.figureQs.length, 0) };
 }
 
 function figureToMcq(m: MergedFigure, drafts: FigureDraft[], imageId: string | undefined): MCQQuestion {

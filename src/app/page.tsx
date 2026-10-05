@@ -16,8 +16,8 @@ import { DashboardView } from "@/components/dashboard-view";
 import { QuestionBankView } from "@/components/question-bank-view";
 import { SvgEditorModal } from "@/components/svg-editor-modal";
 import { TestView } from "@/components/test-view";
-import { BaseSwitcher } from "@/components/base-switcher";
-import { useBuiltInBanks, type BaseId, type BuiltInBankId } from "@/lib/built-in-banks";
+import { dedupeMcq, mergeIntoBank } from "@/lib/dedupe";
+import type { DocumentPart } from "@/lib/ingestion/to-mcq";
 import { useT } from "@/lib/i18n";
 import {
   MCQQuestion,
@@ -68,22 +68,7 @@ export default function Home() {
   const [testMode, setTestMode] = useState<TestMode>("all");
   const [allDocuments, setAllDocuments] = useState<DocumentRecord[]>([]);
 
-  // Built-in bases are separate from the user's own uploads and never mixed with them.
-  const banks = useBuiltInBanks();
-  const [base, setBase] = useState<BaseId>("physiology");
-  const [bankEdits, setBankEdits] = useState<Partial<Record<BuiltInBankId, StructuredQuestion[]>>>({});
-  const bankQuestions = (id: BuiltInBankId) => bankEdits[id] ?? banks[id].data ?? null;
-  const baseQuestions = base === "mine" ? allQuestions : (bankQuestions(base) ?? []);
-  const baseReady = base === "mine" || !!bankQuestions(base);
-  const baseCounts: Record<BaseId, number | null> = {
-    physiology: bankQuestions("physiology")?.length ?? null,
-    anatomy: bankQuestions("anatomy")?.length ?? null,
-    mine: allQuestions.length,
-  };
-  const updateBaseQuestions = (updated: StructuredQuestion[]) => {
-    if (base === "mine") handleUpdateBankQuestions(updated);
-    else setBankEdits((e) => ({ ...e, [base]: updated }));
-  };
+  const [mergeInfo, setMergeInfo] = useState<{ found: number; unique: number; files: number } | null>(null);
 
   // Current upload session state
   const [pdfFile, setPdfFile] = useState<File | Blob | null>(null);
@@ -227,176 +212,100 @@ export default function Home() {
   };
 
   const handleStartExtraction = async (
-    file: File | Blob,
-    name: string,
+    files: File[],
     options: { useAi: boolean; apiKey?: string; useOcr: string }
   ) => {
+    if (!files.length) return;
+    const total = files.length;
+    const name = total === 1 ? files[0].name : files.map((f) => f.name).join(", ");
     setIsProcessing(true);
     setError(null);
-    setPdfFile(file);
-    setFilename(name);
+    // Page links only make sense for a single source file.
+    setPdfFile(total === 1 ? files[0] : null);
+    setShowPdfPreview(total === 1);
+    setFilename(total === 1 ? name : t("filesSelected", { n: total }));
     setActiveTab("upload");
 
-    setProgress({
-      step: "analyzing",
-      message: t("progAnalyzing"),
-      percent: 15,
-    });
-
     try {
-      let extractedQuestions: MCQQuestion[] = [];
-      let computedStats: ExtractionStats = {
-        totalQuestions: 0,
-        answeredCount: 0,
-        unansweredCount: 0,
-        needsReviewCount: 0,
-        totalPages: 1,
-        isOcrUsed: false,
-      };
+      const { extractDocumentPart, mergeDocumentParts } = await import("@/lib/ingestion/to-mcq");
+      const ocr = options.useOcr === "force" ? "force" : "auto";
+      const parts: DocumentPart[] = [];
+      const legacyQuestions: MCQQuestion[] = [];
+      const failed: string[] = [];
+      let totalPages = 0;
+      let isScanned = false;
+      let isBijoy = false;
+      const pct = (fileDone: number) => Math.min(90, Math.round(5 + (fileDone / total) * 85));
 
-      // Client-side extraction handles files up to 150MB in browser without 413 error
-      setProgress({
-        step: "extracting",
-        message: t("progReading"),
-        percent: 25,
-      });
-
-      const arrayBuffer = await file.arrayBuffer();
-      // pdf.js transfers (detaches) the buffer it receives, so keep a copy for the engine fallback.
-      const engineBytes = arrayBuffer.slice(0);
-      const runEngine = async () => {
-        setProgress({ step: "detecting_questions", message: t("progEngine"), percent: 88 });
-        const { extractWithEngine } = await import("@/lib/ingestion/to-mcq");
-        return extractWithEngine(engineBytes, { ocr: options.useOcr === "force" ? "force" : "auto" });
-      };
-      // The universal engine is the primary extractor; the legacy parser only runs when it finds nothing.
-      const engineFirst = await runEngine().catch((e) => {
-        console.warn("Engine extraction failed, falling back to legacy parser:", e);
-        return null;
-      });
-      if (engineFirst && engineFirst.questions.length > 0) extractedQuestions = engineFirst.questions;
-      const clientRes: ClientExtractionResult = extractedQuestions.length > 0 && !options.useAi
-        ? { success: true, totalPages: engineFirst!.pageCount, pages: [], fullText: "", isScanned: false }
-        : await extractTextFromPDFClient(
-        arrayBuffer,
-        (curr, total, msg) => {
-          setProgress({
-            step: options.useOcr === "force" ? "ocr" : "extracting",
-            message: options.useOcr === "force" ? t("progOcrPage", { n: curr, total }) : t("progPage", { n: curr, total }),
-            percent: Math.min(85, Math.round(25 + (curr / total) * 60)),
-          });
-        },
-        { forceOcr: options.useOcr === "force", lang: "rus+eng" }
-      );
-
-      if (!clientRes.success) {
-        console.warn("Legacy parser error:", clientRes.error);
-        const legacyError = t("errExtractFail");
-        const engineRes = await runEngine().catch((e) => {
-          console.error("Engine fallback failed:", e);
+      for (let i = 0; i < total; i++) {
+        const file = files[i];
+        setProgress({ step: "extracting", message: t("progFile", { i: i + 1, total, name: file.name }), percent: pct(i) });
+        const bytes = await file.arrayBuffer();
+        // The universal engine is primary; the legacy parser only runs for a file the engine finds nothing in.
+        const part = await extractDocumentPart(bytes.slice(0), i, {
+          ocr,
+          onProgress: (n, pages) =>
+            setProgress({
+              step: ocr === "force" ? "ocr" : "extracting",
+              message: t("progFilePage", { i: i + 1, total, n, pages }),
+              percent: pct(i + n / Math.max(1, pages)),
+            }),
+        }).catch((e) => {
+          console.warn(`Engine failed on ${file.name}, trying legacy parser:`, e);
           return null;
         });
-        if (!engineRes) throw new Error(legacyError);
-        clientRes.success = true;
-        clientRes.pages = [];
-        clientRes.fullText = "";
-        clientRes.totalPages = engineRes.pageCount;
-        extractedQuestions = engineRes.questions;
-      }
-
-      // If AI extraction requested, send clean JSON text to /api/extract
-      if (options.useAi && (options.apiKey || process.env.NEXT_PUBLIC_HAS_AI)) {
-        setProgress({
-          step: "detecting_answers",
-          message: t("progAi"),
-          percent: 85,
-        });
-
-        try {
-          const aiRes = await fetch("/api/extract", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              fullText: clientRes.fullText,
-              pages: clientRes.pages,
-              totalPages: clientRes.totalPages,
-              useAi: true,
-              apiKey: options.apiKey,
-            }),
-          });
-
-          const contentType = aiRes.headers.get("content-type") || "";
-          if (aiRes.ok && contentType.includes("application/json")) {
-            const aiData = await aiRes.json();
-            if (aiData.success && aiData.questions?.length > 0) {
-              extractedQuestions = aiData.questions;
-              computedStats = aiData.stats;
-            }
-          }
-        } catch (aiErr) {
-          console.warn("AI extraction fallback to deterministic engine:", aiErr);
+        if (part && (part.instances.length > 0 || part.figureQs.length > 0)) {
+          parts.push(part);
+          totalPages += part.pageCount;
+          continue;
         }
-      }
-
-      // Deterministic parsing with strict noise filtering & question isolation
-      if (extractedQuestions.length === 0) {
-        setProgress({
-          step: "detecting_questions",
-          message: t("progIsolating"),
-          percent: 90,
+        const legacy: ClientExtractionResult = await extractTextFromPDFClient(bytes, () => undefined, {
+          forceOcr: ocr === "force",
+          lang: "rus+eng",
         });
-
-        extractedQuestions = parseMCQDocument(clientRes.pages, clientRes.fullText);
-        if (extractedQuestions.length === 0) {
-          try {
-            extractedQuestions = (await runEngine()).questions;
-          } catch (e) {
-            console.warn("Engine fallback failed:", e);
-          }
-        }
-      }
-      if (!computedStats || computedStats.totalQuestions !== extractedQuestions.length) {
-        computedStats = {
-          totalQuestions: extractedQuestions.length,
-          answeredCount: extractedQuestions.filter((q) => q.status === "answered").length,
-          unansweredCount: extractedQuestions.filter((q) => q.status === "missing_answer").length,
-          needsReviewCount: extractedQuestions.filter((q) => q.confidence === "needs-review").length,
-          totalPages: clientRes.totalPages,
-          isOcrUsed: clientRes.isScanned,
-        };
+        const found = legacy.success ? parseMCQDocument(legacy.pages, legacy.fullText) : [];
+        if (!found.length) failed.push(file.name);
+        legacyQuestions.push(...found);
+        totalPages += legacy.totalPages || part?.pageCount || 0;
+        isScanned ||= legacy.isScanned;
+        isBijoy ||= !!legacy.isBijoyScrambled;
       }
 
-      setProgress({
-        step: "completed",
-        message: t("progCompleted"),
-        percent: 100,
-      });
+      setProgress({ step: "detecting_questions", message: t("progMerging"), percent: 94 });
+      const merged = mergeDocumentParts(parts);
+      const foundTotal = merged.totalFound + legacyQuestions.length;
+      const extractedQuestions = dedupeMcq([...merged.questions, ...legacyQuestions]);
 
+      const computedStats: ExtractionStats = {
+        totalQuestions: extractedQuestions.length,
+        answeredCount: extractedQuestions.filter((q) => q.status === "answered").length,
+        unansweredCount: extractedQuestions.filter((q) => q.status === "missing_answer").length,
+        needsReviewCount: extractedQuestions.filter((q) => q.confidence === "needs-review").length,
+        totalPages: Math.max(1, totalPages),
+        isOcrUsed: isScanned,
+      };
+
+      setProgress({ step: "completed", message: t("progCompleted"), percent: 100 });
       setCurrentQuestions(extractedQuestions);
       setStats(computedStats);
+      setMergeInfo({ found: foundTotal, unique: extractedQuestions.length, files: total });
+      setIsBijoyDetected(
+        (isBijoy || extractedQuestions.some((q) => isScrambledBijoyText(q.question))) && options.useOcr !== "force"
+      );
 
-      const hasBijoyPatterns =
-        clientRes.isBijoyScrambled ||
-        extractedQuestions.some((q) => isScrambledBijoyText(q.question));
-      setIsBijoyDetected(Boolean(hasBijoyPatterns && options.useOcr !== "force"));
-
-      // Register Document & Merge into Question Bank
       const docRecord = registerDocument(
         name,
-        file.size,
-        clientRes.totalPages,
+        files.reduce((s, f) => s + f.size, 0),
+        computedStats.totalPages,
         extractedQuestions.length,
-        clientRes.isScanned ? "scanned" : "text"
+        isScanned ? "scanned" : "text"
       );
       setAllDocuments(loadSavedDocuments());
 
-      const structuredItems = extractedQuestions.map((q) =>
-        toStructuredQuestion(q, docRecord.id, name)
-      );
-      const updatedBank = [...structuredItems, ...allQuestions];
+      const structuredItems = extractedQuestions.map((q) => toStructuredQuestion(q, docRecord.id, name));
+      const { bank: updatedBank } = mergeIntoBank(allQuestions, structuredItems);
       setAllQuestions(updatedBank);
       persistQuestions(updatedBank);
-      if (structuredItems.length) setBase("mine");
 
       localStorage.setItem(
         STORAGE_KEY,
@@ -408,13 +317,18 @@ export default function Home() {
         })
       );
 
+      for (const f of failed) showToast(t("toastFileFailed", { name: f }), undefined, "error");
       if (extractedQuestions.length > 0) {
         confetti({
           particleCount: 50,
           spread: 70,
           origin: { y: 0.6 },
         });
-        showToast(t("toastDoneT"), t("toastExtracted", { n: extractedQuestions.length }), "success");
+        showToast(
+          t("toastDoneT"),
+          t("toastMerged", { n: extractedQuestions.length, dup: Math.max(0, foundTotal - extractedQuestions.length) }),
+          "success"
+        );
       } else {
         showToast(t("toastNone"), t("toastNoneD"), "info");
       }
@@ -495,6 +409,7 @@ export default function Home() {
       setSelectedQuestionId(null);
       setError(null);
       setIsBijoyDetected(false);
+      setMergeInfo(null);
       localStorage.removeItem(STORAGE_KEY);
       setActiveTab("upload");
       
@@ -572,51 +487,29 @@ export default function Home() {
     <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        questionCount={baseQuestions.length}
+        questionCount={allQuestions.length}
         hasExtractedData={currentQuestions.length > 0}
         onReset={handleResetSession}
       />
-      {(activeTab === "dashboard" || activeTab === "bank" || activeTab === "test") && (
-        <BaseSwitcher active={base} onChange={setBase} counts={baseCounts} showMine={allQuestions.length > 0 || base === "mine"} />
-      )}
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-        {(activeTab === "dashboard" || activeTab === "bank" || activeTab === "test") && !baseReady ? (
-          <div role="status" className="max-w-xl mx-auto p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-center gap-3 text-sm text-slate-600 dark:text-slate-300">
-            {banks[base].error ? (
-              <>
-                <span className="text-red-700 dark:text-red-400">{t("baseLoadError")}</span>
-                <button type="button" onClick={() => void banks[base].mutate()} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-bold">
-                  {t("figRetry")}
-                </button>
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />
-                {t("testSourceLoading")}
-              </>
-            )}
-          </div>
-        ) : null}
         {/* VIEW A: DASHBOARD VIEW */}
-        {activeTab === "dashboard" && baseReady && (
+        {activeTab === "dashboard" && (
           <DashboardView
-            key={base}
-            questions={baseQuestions}
-            documents={base === "mine" ? allDocuments : []}
+            questions={allQuestions}
+            documents={allDocuments}
             onNavigateTab={setActiveTab}
             onDeleteDocument={handleDeleteDocument}
-            onClearAll={base === "mine" ? handleClearAll : () => setBankEdits((e) => ({ ...e, [base]: undefined }))}
+            onClearAll={handleClearAll}
             onStartTest={handleStartTest}
           />
         )}
 
         {/* VIEW B: QUESTION BANK VIEW */}
-        {activeTab === "bank" && baseReady && (
+        {activeTab === "bank" && (
           <QuestionBankView
-            key={base}
-            questions={baseQuestions}
-            onUpdateQuestions={updateBaseQuestions}
+            questions={allQuestions}
+            onUpdateQuestions={handleUpdateBankQuestions}
             onViewSource={(p) => {
               setActivePdfPage(p);
               setActiveTab("upload");
@@ -633,7 +526,7 @@ export default function Home() {
                 <LandingHero />
 
                 <PdfUploader
-                  onFileSelect={(file, opts) => handleStartExtraction(file, file.name, opts)}
+                  onFilesSelect={(files, opts) => handleStartExtraction(files, opts)}
                   isLoading={isProcessing}
                 />
 
@@ -665,6 +558,11 @@ export default function Home() {
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-semibold">
                       {currentQuestions.length} {t("questions")}
                     </span>
+                    {mergeInfo && mergeInfo.found > mergeInfo.unique && (
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {t("toastMerged", { n: mergeInfo.unique, dup: mergeInfo.found - mergeInfo.unique })}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -766,8 +664,8 @@ export default function Home() {
           </div>
         )}
 
-        {activeTab === "test" && baseReady && (
-          <TestView key={`${base}-${testMode}`} questions={baseQuestions} initialMode={testMode} onGoUpload={() => setActiveTab("upload")} />
+        {activeTab === "test" && (
+          <TestView key={testMode} questions={allQuestions} initialMode={testMode} onGoUpload={() => setActiveTab("upload")} />
         )}
 
         {/* VIEW D: SVG STUDIO STANDALONE TAB */}
