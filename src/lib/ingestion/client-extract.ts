@@ -1,6 +1,7 @@
 "use client";
 
 import type { PageAnnotation, PageInput, RawImageRegion, RawTextItem } from "./types";
+import { isBlankFingerprint } from "../blank-image";
 
 /**
  * Reads a PDF in the browser and yields one raw PageInput per page: text items
@@ -339,6 +340,10 @@ export async function renderRegion(
     full.width = full.height = 0;
     const hash = averageHash(crop);
     const fine = fineFingerprint(crop);
+    if (isBlankFingerprint(fine)) {
+      crop.width = crop.height = 0;
+      return null;
+    }
     const blob = await new Promise<Blob | null>((r) => crop.toBlob(r, "image/jpeg", 0.85));
     crop.width = crop.height = 0;
     return blob ? { blob, hash, fine } : null;
