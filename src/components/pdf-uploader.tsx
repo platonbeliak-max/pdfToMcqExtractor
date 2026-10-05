@@ -1,32 +1,44 @@
 "use client";
 
 import React, { useState, useRef, DragEvent } from "react";
-import { UploadCloud, FileText, X, AlertCircle, Sparkles, Cpu, ArrowRight } from "lucide-react";
+import { UploadCloud, FileText, X, AlertCircle, Sparkles, Cpu, ArrowRight, Plus } from "lucide-react";
 import { useT } from "@/lib/i18n";
 
 type OcrMode = "auto" | "force" | "none";
 type Options = { useAi: boolean; apiKey?: string; useOcr: string };
 
 interface PdfUploaderProps {
-  onFileSelect: (file: File, options: Options) => void;
+  onFilesSelect: (files: File[], options: Options) => void;
   isLoading: boolean;
 }
 
-export function PdfUploader({ onFileSelect, isLoading }: PdfUploaderProps) {
+const MAX_SIZE = 150 * 1024 * 1024;
+const fileId = (f: File) => `${f.name}:${f.size}:${f.lastModified}`;
+
+export function PdfUploader({ onFilesSelect, isLoading }: PdfUploaderProps) {
   const { t } = useT();
   const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [useOcr, setUseOcr] = useState<OcrMode>("auto");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const validateAndSetFile = (file: File) => {
+  const addFiles = (list: FileList | null) => {
+    if (!list?.length) return;
     setError(null);
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) return setError(t("errType"));
-    if (file.size === 0) return setError(t("errEmpty"));
-    if (file.size > 150 * 1024 * 1024) return setError(t("errSize"));
-    setSelectedFile(file);
+    const accepted: File[] = [];
+    for (const file of Array.from(list)) {
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      if (!isPdf) setError(t("errType"));
+      else if (file.size === 0) setError(t("errEmpty"));
+      else if (file.size > MAX_SIZE) setError(t("errSize"));
+      else accepted.push(file);
+    }
+    setFiles((prev) => {
+      const seen = new Set(prev.map(fileId));
+      return [...prev, ...accepted.filter((f) => !seen.has(fileId(f)))];
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleDrag = (e: DragEvent<HTMLDivElement>) => {
@@ -40,89 +52,102 @@ export function PdfUploader({ onFileSelect, isLoading }: PdfUploaderProps) {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files?.[0]) validateAndSetFile(e.dataTransfer.files[0]);
+    addFiles(e.dataTransfer.files);
   };
 
-  const handleClear = () => {
-    setSelectedFile(null);
-    setError(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
+  const removeFile = (id: string) => setFiles((prev) => prev.filter((f) => fileId(f) !== id));
+  const totalMb = files.reduce((s, f) => s + f.size, 0) / 1048576;
 
   return (
-    <div className="w-full max-w-2xl mx-auto space-y-5">
+    <div className="w-full max-w-2xl mx-auto flex flex-col gap-5">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => addFiles(e.target.files)}
+        disabled={isLoading}
+      />
       <div
         onDragEnter={handleDrag}
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        onClick={() => !selectedFile && fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center transition-all cursor-pointer ${
+        onClick={() => files.length === 0 && fileInputRef.current?.click()}
+        className={`relative border-2 border-dashed rounded-2xl p-5 sm:p-10 text-center transition-all ${
           dragActive
             ? "border-blue-500 bg-blue-50/50 dark:bg-blue-950/20"
             : "border-slate-300 dark:border-slate-700 hover:border-blue-400 bg-white/70 dark:bg-slate-900/70"
-        } ${selectedFile ? "cursor-default border-solid border-blue-500/50" : ""}`}
+        } ${files.length ? "border-solid border-blue-500/50" : "cursor-pointer"}`}
       >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,application/pdf"
-          className="hidden"
-          onChange={(e) => e.target.files?.[0] && validateAndSetFile(e.target.files[0])}
-          disabled={isLoading}
-        />
-
-        {!selectedFile ? (
+        {files.length === 0 ? (
           <div className="flex flex-col items-center">
             <div className="p-4 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 mb-4">
               <UploadCloud className="w-8 h-8" />
             </div>
-            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">{t("dropTitle")}</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md">{t("dropText")}</p>
-            <div className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 text-balance">{t("dropTitle")}</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md text-pretty leading-relaxed">{t("dropText")}</p>
+            <div className="mt-5 inline-flex items-center gap-2 min-h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors">
               <FileText className="w-4 h-4" />
               {t("browse")}
             </div>
             <div className="mt-3 text-xs text-slate-400 dark:text-slate-500">{t("maxSize")}</div>
           </div>
         ) : (
-          <div className="flex flex-col items-center">
-            <div className="flex items-center gap-4 p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 w-full max-w-md">
-              <div className="p-3 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
-                <FileText className="w-6 h-6" />
-              </div>
-              <div className="flex-1 text-left min-w-0">
-                <div className="font-semibold text-slate-900 dark:text-slate-100 truncate text-sm">{selectedFile.name}</div>
-                <div className="text-xs text-slate-500 dark:text-slate-400">{(selectedFile.size / 1048576).toFixed(1)} MB</div>
-              </div>
+          <div className="flex flex-col items-stretch gap-3">
+            <div className="flex items-center justify-between gap-2 text-left">
+              <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                {t("filesSelected", { n: files.length })}
+              </span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{totalMb.toFixed(1)} MB</span>
+            </div>
+            <ul className="flex flex-col gap-2">
+              {files.map((f) => (
+                <li
+                  key={fileId(f)}
+                  className="flex items-center gap-3 p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                >
+                  <div className="p-2 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 shrink-0">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1 text-left min-w-0">
+                    <div className="font-semibold text-slate-900 dark:text-slate-100 truncate text-sm">{f.name}</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">{(f.size / 1048576).toFixed(1)} MB</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(fileId(f))}
+                    disabled={isLoading}
+                    aria-label={`${t("removeFile")}: ${f.name}`}
+                    className="flex items-center justify-center w-11 h-11 shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-col sm:flex-row gap-2 mt-2">
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleClear();
-                }}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={isLoading}
-                aria-label={t("removeFile")}
-                title={t("removeFile")}
-                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"
+                className="inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-slate-300 dark:border-slate-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
               >
-                <X className="w-4 h-4" />
+                <Plus className="w-4 h-4" />
+                {t("addMoreFiles")}
+              </button>
+              <button
+                type="button"
+                onClick={() => onFilesSelect(files, { useAi: false, useOcr })}
+                disabled={isLoading}
+                className="flex-1 inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-md transition-colors disabled:opacity-50"
+              >
+                <Sparkles className="w-4 h-4" />
+                {t("extractNow")}
+                <ArrowRight className="w-4 h-4" />
               </button>
             </div>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onFileSelect(selectedFile, { useAi: false, useOcr });
-              }}
-              disabled={isLoading}
-              className="mt-6 inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-md transition-colors disabled:opacity-50"
-            >
-              <Sparkles className="w-4 h-4" />
-              {t("extractNow")}
-              <ArrowRight className="w-4 h-4" />
-            </button>
           </div>
         )}
       </div>
@@ -150,7 +175,7 @@ export function PdfUploader({ onFileSelect, isLoading }: PdfUploaderProps) {
           <select
             value={useOcr}
             onChange={(e) => setUseOcr(e.target.value as OcrMode)}
-            className="px-2.5 py-1 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-800 font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="min-h-11 px-2.5 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-800 text-base sm:text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="auto">{t("ocrAuto")}</option>
             <option value="force">{t("ocrForce")}</option>

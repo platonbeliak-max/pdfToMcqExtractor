@@ -1,6 +1,7 @@
 "use client";
 
 import type { PageAnnotation, PageInput, RawImageRegion, RawTextItem } from "./types";
+import { isBlankFingerprint } from "../blank-image";
 
 /**
  * Reads a PDF in the browser and yields one raw PageInput per page: text items
@@ -125,7 +126,7 @@ function controlsToItems(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
  * separate the student's response from the question stem.
  */
 function markAnswerFields(shapes: Shape[], text: RawTextItem[]): RawTextItem[] {
-  const boxes = shapes.filter((s) => s.filled && s.h >= 10 && s.h <= 32 && s.w >= 30 && s.w <= 460);
+  const boxes = shapes.filter((s) => s.filled && s.h >= 10 && s.h <= 44 && s.w >= 30 && s.w <= 460);
   const same = (a: Shape, b: Shape) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Math.abs(a.w - b.w) < 3;
   const abuts = (a: Shape, b: Shape) =>
     !same(a, b) &&
@@ -339,6 +340,10 @@ export async function renderRegion(
     full.width = full.height = 0;
     const hash = averageHash(crop);
     const fine = fineFingerprint(crop);
+    if (isBlankFingerprint(fine)) {
+      crop.width = crop.height = 0;
+      return null;
+    }
     const blob = await new Promise<Blob | null>((r) => crop.toBlob(r, "image/jpeg", 0.85));
     crop.width = crop.height = 0;
     return blob ? { blob, hash, fine } : null;

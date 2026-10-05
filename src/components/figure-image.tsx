@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ImageOff, RefreshCw } from "lucide-react";
 import { getImage } from "@/lib/figure-store";
 import { useT } from "@/lib/i18n";
+import { isBlankFingerprint } from "@/lib/blank-image";
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -25,9 +26,22 @@ const loadUrl = async ([, id]: [string, string]) => {
   return res.ok ? `/banks/img/${encodeURIComponent(id)}.webp` : null;
 };
 
+function looksBlank(img: HTMLImageElement): boolean {
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return false;
+  ctx.drawImage(img, 0, 0, 32, 32);
+  const px = ctx.getImageData(0, 0, 32, 32).data;
+  let fine = "";
+  for (let i = 0; i < px.length; i += 4) fine += Math.min(15, Math.floor((px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) / 16)).toString(16);
+  return isBlankFingerprint(fine);
+}
+
 export function FigureImage({ imageId, className = "" }: { imageId: string; className?: string }) {
   const { t } = useT();
   const [failed, setFailed] = useState(false);
+  const [blank, setBlank] = useState(false);
   const {
     data: url,
     isLoading,
@@ -65,12 +79,18 @@ export function FigureImage({ imageId, className = "" }: { imageId: string; clas
       </div>
     );
   }
+  if (blank) return null;
   return (
     // eslint-disable-next-line @next/next/no-img-element -- local data URL from IndexedDB
     <img
       src={url}
       alt={t("figAlt")}
       decoding="async"
+      onLoad={(e) => {
+        try {
+          if (looksBlank(e.currentTarget)) setBlank(true);
+        } catch {}
+      }}
       onError={() => setFailed(true)}
       className={`w-full h-auto rounded-2xl border border-slate-200 dark:border-slate-700 bg-white text-transparent ${className}`}
     />

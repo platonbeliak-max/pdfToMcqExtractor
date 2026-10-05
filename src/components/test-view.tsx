@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import useSWR from "swr";
 import { StructuredQuestion, answerKeys, isFigureQuestion, type MatchingAnswer, type SequenceAnswer } from "@/types/question";
 import { useT } from "@/lib/i18n";
-import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
 
@@ -98,8 +97,48 @@ function correctAnswerText(item: TestItem): string {
   return item.textAnswer;
 }
 
+const BLANK = /_{2,}|…{2,}|\.{4,}/g;
+
+const stripQuotes = (s: string) => s.replace(/^[\s«"“'„]+|[\s»"”'.,;:!?]+$/g, "").trim();
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const looseRe = (s: string) => escapeRe(s.replace(/[«»"“”„]/g, "").trim()).replace(/\s+/g, "\\s+");
+
+function alignToTemplate(text: string, answer: string): string[] | null {
+  const fixed = text.split(BLANK);
+  const plain = answer.replace(/[«»"“”„]/g, "");
+  const pattern = fixed
+    .map((part, i) => {
+      const lit = looseRe(part);
+      if (i === 0) return `^\\s*${lit}\\s*`;
+      const isLast = i === fixed.length - 1;
+      if (isLast) return lit ? `(.+?)\\s*${lit}[\\s.,;:!?]*$` : `(.+?)[\\s.,;:!?]*$`;
+      return `(.+?)${lit ? `\\s*${lit}` : "\\s+"}\\s*`;
+    })
+    .join("");
+  const m = plain.match(new RegExp(pattern, "is"));
+  if (!m) return null;
+  const words = m.slice(1).map(stripQuotes);
+  return words.every(Boolean) ? words : null;
+}
+
+function blankAnswers(item: TestItem): string[] | null {
+  if (item.correct.length || item.figure || item.sequence || item.matching) return null;
+  const count = (item.text.match(BLANK) ?? []).length;
+  if (!count || !item.textAnswer) return null;
+  const quoted = [...item.textAnswer.matchAll(/«([^»]+)»|"([^"]+)"|“([^”]+)”/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim());
+  if (quoted.length === count) return quoted;
+  const aligned = alignToTemplate(item.text, item.textAnswer);
+  if (aligned?.length === count) return aligned;
+  const parts = item.textAnswer.split(/\s*[;,]\s*/).map(stripQuotes).filter(Boolean);
+  if (parts.length === count) return parts;
+  if (count === 1 && !quoted.length) return [stripQuotes(item.textAnswer)];
+  return null;
+}
+
 function isRight(item: TestItem, a: Answer | undefined): boolean {
   if (!a) return false;
+  const blanks = blankAnswers(item);
+  if (blanks) return blanks.every((w, i) => textMatches(a.labels?.[`b${i}`] ?? "", w));
   if (item.sequence || item.matching) return item.options.every((o) => slotRight(item, a, o.key));
   if (item.figure) return item.options.every((o) => textMatches(a.labels?.[o.key] ?? "", o.text));
   if (item.correct.length) {
@@ -153,19 +192,6 @@ function textMatches(typed: string, expected: string): boolean {
   return editDistance(a, b) <= Math.floor(b.length / 6);
 }
 
-const BUILT_IN_BANKS = [
-  { id: "anatomy", label: "bankAnatomy" },
-  { id: "physiology", label: "bankPhysiology" },
-] as const;
-
-type Source = "mine" | (typeof BUILT_IN_BANKS)[number]["id"];
-
-const fetchBank = async (url: string): Promise<StructuredQuestion[]> => {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return ((await res.json()) as { questions: StructuredQuestion[] }).questions;
-};
-
 export function TestView({
   questions,
   onGoUpload,
@@ -175,66 +201,7 @@ export function TestView({
   onGoUpload: () => void;
   initialMode?: TestMode;
 }) {
-  const { t } = useT();
-  const [source, setSource] = useState<Source>(() => (questions.some(hasAnswer) ? "mine" : "anatomy"));
-  const bank = useSWR(source === "mine" ? null : `/banks/${source}.json`, fetchBank, { revalidateOnFocus: false });
-
-  const picker = (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t("testSource")}</legend>
-      <div className="flex flex-wrap gap-2">
-        {[
-          { id: "mine" as Source, label: t("testSourceMine", { n: questions.filter(hasAnswer).length }) },
-          ...BUILT_IN_BANKS.map((b) => ({ id: b.id as Source, label: t(b.label) })),
-        ].map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            aria-pressed={source === s.id}
-            onClick={() => setSource(s.id)}
-            className={`px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${
-              source === s.id
-                ? "bg-blue-600 border-blue-600 text-white"
-                : "border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-blue-500"
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-    </fieldset>
-  );
-
-  if (source !== "mine" && !bank.data) {
-    return (
-      <div className="max-w-xl mx-auto p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col gap-6">
-        {picker}
-        {bank.error ? (
-          <div className="flex flex-wrap items-center gap-3 text-sm text-red-700 dark:text-red-400">
-            <span>{t("testSourceError")}</span>
-            <button type="button" onClick={() => void bank.mutate()} className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-800 font-bold">
-              {t("figRetry")}
-            </button>
-          </div>
-        ) : (
-          <p role="status" className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-            <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-            {t("testSourceLoading")}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <TestRunner
-      key={source}
-      questions={source === "mine" ? questions : bank.data!}
-      onGoUpload={onGoUpload}
-      initialMode={initialMode}
-      picker={picker}
-    />
-  );
+  return <TestRunner questions={questions} onGoUpload={onGoUpload} initialMode={initialMode} picker={null} />;
 }
 
 function TestRunner({
@@ -436,9 +403,15 @@ function TestRunner({
     setChecked(true);
   };
   const structured = !!(item.sequence || item.matching);
+  const blanks = blankAnswers(item);
   const setSlot = (key: string, value: string) =>
     setAnswers({ ...answers, [item.id]: { ...ans, slots: { ...ans.slots, [key]: value } } });
-  const canCheck = structured
+  const setBlank = (i: number, value: string) =>
+    setAnswers({ ...answers, [item.id]: { ...ans, labels: { ...ans.labels, [`b${i}`]: value } } });
+  const textParts = blanks ? item.text.split(BLANK) : [];
+  const canCheck = blanks
+    ? blanks.every((_, i) => ans.labels?.[`b${i}`]?.trim())
+    : structured
     ? item.options.every((o) => ans.slots?.[o.key])
     : item.figure
     ? item.options.some((o) => ans.labels?.[o.key]?.trim())
@@ -476,8 +449,58 @@ function TestRunner({
 
       <div className="p-5 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col gap-5">
         <div>
-          <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
-          {multi && <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">{t("testMulti", { n: item.correct.length })}</p>}
+          {blanks ? (
+            <>
+              <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-3">{t("testBlankHint")}</p>
+              <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-loose text-pretty">
+                {textParts.map((part, i) => {
+                  if (i === textParts.length - 1) return <span key={i}>{part}</span>;
+                  const value = ans.labels?.[`b${i}`] ?? "";
+                  const ok = checked && textMatches(value, blanks[i]);
+                  const tone = !checked
+                    ? "border-blue-500 focus:border-blue-600"
+                    : ok
+                      ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100"
+                      : "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100";
+                  return (
+                    <span key={i}>
+                      {part}
+                      <span className="inline-flex flex-col align-middle mx-1 my-1">
+                        <input
+                          id={`blank-${i}`}
+                          aria-label={t("testBlank", { n: i + 1 })}
+                          autoComplete="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          value={value}
+                          disabled={checked}
+                          onChange={(e) => setBlank(i, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return;
+                            e.preventDefault();
+                            if (checked) return next();
+                            const nextInput = document.getElementById(`blank-${i + 1}`);
+                            if (nextInput) nextInput.focus();
+                            else if (canCheck) setChecked(true);
+                          }}
+                          style={{ width: `${Math.max(6, Math.min(16, blanks[i].length + 2))}ch` }}
+                          className={`min-h-11 px-2 py-1 rounded-lg border-2 bg-transparent text-base font-semibold text-slate-900 dark:text-slate-100 outline-none ${tone}`}
+                        />
+                        {checked && !ok && <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 leading-tight mt-0.5">{blanks[i]}</span>}
+                      </span>
+                    </span>
+                  );
+                })}
+              </p>
+            </>
+          ) : (
+            <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
+          )}
+          {multi && (
+            <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">
+              {t("testMulti", { n: item.correct.length })} · {t("testMultiPicked", { k: ans.picked.length, n: item.correct.length })}
+            </p>
+          )}
         </div>
         {!item.figure && item.imageId && <FigureImage imageId={item.imageId} className="max-h-96 object-contain" />}
 
@@ -636,7 +659,9 @@ function TestRunner({
               const isCorrect = item.correct.includes(o.key);
               let cls = "border-slate-200 dark:border-slate-700 hover:border-blue-500 text-slate-800 dark:text-slate-200";
               if (!checked && picked) cls = "border-blue-600 bg-blue-50 dark:bg-blue-950/40 text-slate-900 dark:text-slate-100";
+              const missed = checked && isCorrect && !picked;
               if (checked && isCorrect) cls = "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100";
+              if (missed) cls = "border-dashed border-amber-500 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100";
               if (checked && picked && !isCorrect) cls = "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100";
               return (
                 <button
@@ -649,13 +674,14 @@ function TestRunner({
                 >
                   <span className={`mt-0.5 w-4 h-4 shrink-0 border-2 ${multi ? "rounded" : "rounded-full"} ${picked ? "bg-current border-current" : "border-slate-400"}`} aria-hidden="true" />
                   <span className="text-sm leading-relaxed">{o.text}</span>
-                  {checked && isCorrect && <CheckCircle2 className="w-4 h-4 ml-auto shrink-0 text-emerald-600" />}
+                  {missed && <span className="ml-auto shrink-0 text-xs font-bold text-amber-700 dark:text-amber-400">{t("testMissed")}</span>}
+                  {checked && isCorrect && !missed && <CheckCircle2 className="w-4 h-4 ml-auto shrink-0 text-emerald-600" />}
                   {checked && picked && !isCorrect && <XCircle className="w-4 h-4 ml-auto shrink-0 text-red-600" />}
                 </button>
               );
             })}
           </div>
-        ) : (
+        ) : blanks ? null : (
           <div className="flex flex-col gap-2">
             <label htmlFor="typed" className="text-sm font-bold text-slate-700 dark:text-slate-300">{t("answer")}</label>
             <input
