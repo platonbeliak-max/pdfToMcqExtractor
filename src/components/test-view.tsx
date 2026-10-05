@@ -6,6 +6,7 @@ import { useT } from "@/lib/i18n";
 import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
+import { BLANK, clozeAnswers } from "@/lib/cloze";
 
 interface TestItem {
   id: string;
@@ -97,42 +98,9 @@ function correctAnswerText(item: TestItem): string {
   return item.textAnswer;
 }
 
-const BLANK = /_{2,}|…{2,}|\.{4,}/g;
-
-const stripQuotes = (s: string) => s.replace(/^[\s«"“'„]+|[\s»"”'.,;:!?]+$/g, "").trim();
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const looseRe = (s: string) => escapeRe(s.replace(/[«»"“”„]/g, "").trim()).replace(/\s+/g, "\\s+");
-
-function alignToTemplate(text: string, answer: string): string[] | null {
-  const fixed = text.split(BLANK);
-  const plain = answer.replace(/[«»"“”„]/g, "");
-  const pattern = fixed
-    .map((part, i) => {
-      const lit = looseRe(part);
-      if (i === 0) return `^\\s*${lit}\\s*`;
-      const isLast = i === fixed.length - 1;
-      if (isLast) return lit ? `(.+?)\\s*${lit}[\\s.,;:!?]*$` : `(.+?)[\\s.,;:!?]*$`;
-      return `(.+?)${lit ? `\\s*${lit}` : "\\s+"}\\s*`;
-    })
-    .join("");
-  const m = plain.match(new RegExp(pattern, "is"));
-  if (!m) return null;
-  const words = m.slice(1).map(stripQuotes);
-  return words.every(Boolean) ? words : null;
-}
-
 function blankAnswers(item: TestItem): string[] | null {
   if (item.correct.length || item.figure || item.sequence || item.matching) return null;
-  const count = (item.text.match(BLANK) ?? []).length;
-  if (!count || !item.textAnswer) return null;
-  const quoted = [...item.textAnswer.matchAll(/«([^»]+)»|"([^"]+)"|“([^”]+)”/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim());
-  if (quoted.length === count) return quoted;
-  const aligned = alignToTemplate(item.text, item.textAnswer);
-  if (aligned?.length === count) return aligned;
-  const parts = item.textAnswer.split(/\s*[;,]\s*/).map(stripQuotes).filter(Boolean);
-  if (parts.length === count) return parts;
-  if (count === 1 && !quoted.length) return [stripQuotes(item.textAnswer)];
-  return null;
+  return clozeAnswers(item.text, item.textAnswer);
 }
 
 function isRight(item: TestItem, a: Answer | undefined): boolean {

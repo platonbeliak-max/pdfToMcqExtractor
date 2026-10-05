@@ -209,12 +209,27 @@ function sideColumnCut(pages: PageInput[]): number | null {
     for (const i of p.items) {
       const t = i.str.trim();
       if (t === "Вопрос") headerX.push(i.x);
-      else if (/^Выберите\s/.test(t)) contentX.push(i.x);
+      else if (/^Выберите(?:\s|$)/.test(t)) contentX.push(i.x);
     }
   const h = median(headerX);
   const c = median(contentX);
   if (h === null || c === null || c - h < 45) return null;
   return c - 8;
+}
+
+/** Layout differs between uploaded files, so decide per page; pages without evidence inherit from the nearest page that has it. */
+function sideCutsByPage(pages: PageInput[]): (number | null)[] {
+  const has = (p: PageInput) => p.items.some((i) => i.str.trim() === "Вопрос") && p.items.some((i) => /^Выберите(?:\s|$)/.test(i.str.trim()));
+  const own = pages.map((p) => (has(p) ? { cut: sideColumnCut([p]) } : null));
+  return pages.map((_, idx) => {
+    for (let d = 0; d < pages.length; d++) {
+      const back = own[idx - d];
+      if (back) return back.cut;
+      const fwd = own[idx + d];
+      if (fwd) return fwd.cut;
+    }
+    return null;
+  });
 }
 
 export function looksLikeMoodleReview(pages: PageInput[]): boolean {
@@ -253,15 +268,15 @@ function markOf(row: Row): Mark {
 const stripGlyphs = (s: string) => clean(s.replace(new RegExp(`[${CHECK}${CROSS}]`, "g"), ""));
 
 function readInstances(pages: PageInput[]): Instance[] {
-  const cut = sideColumnCut(pages);
+  const cuts = sideCutsByPage(pages);
   const out: Instance[] = [];
   let q: Instance | null = null;
   let inHeader = false;
   let section: "stem" | "options" | "feedback" = "stem";
   let optionX = 0;
 
-  for (const page of pages) {
-    for (const row of rowsOf(page, cut)) {
+  for (const [pageIdx, page] of pages.entries()) {
+    for (const row of rowsOf(page, cuts[pageIdx])) {
       const t = row.text;
       const head = HEADER_RE.exec(t);
       if (head) {
@@ -585,7 +600,8 @@ function parseStructured(q: Instance): Structured {
     groups.splice(0, groups.length, ...split);
   }
 
-  const orderLike = tail.some((r) => r.items.some((i) => ORDER_FIELD_RE.test(i.str.trim())));
+  // A lone numeric field ("…узла (указать цифрой) ⟪3⟫") is a short answer, not a one-row ordering task.
+  const orderLike = groups.length >= 2 && tail.some((r) => r.items.some((i) => ORDER_FIELD_RE.test(i.str.trim())));
   const plain = !tail.some((r) => r.items.some(isField));
   const rightX = plain ? rightColumnX(tail, groups.length) : Infinity;
 
@@ -879,11 +895,24 @@ function pictureClusters(renders: FigureRender[]): (r: FigureRender) => FigureRe
   return (r) => cache.get(id(r)) ?? r;
 }
 
+/**
+ * Pasted screenshots of the Moodle page itself (with the student's marks on the answers) and thin slivers
+ * cut from them are not question figures: showing them would leak the answer or display garbage.
+ */
+function isJunkFigure(page: PageInput, b: { x: number; y: number; w: number; h: number }): boolean {
+  if (b.w < 24 || b.h < 24) return true;
+  if (b.w < 70 && b.h / b.w > 1.8) return true;
+  const words = page.items.filter(
+    (i) => /\p{L}{3,}/u.test(i.str) && i.x >= b.x - 2 && i.x + i.w <= b.x + b.w + 2 && i.y >= b.y - 2 && i.y + i.h <= b.y + b.h + 2,
+  );
+  return words.length >= 3 || words.some((i) => /Баллов|Вопрос|Выполнен|Выберите/i.test(i.str));
+}
+
 function attachFigures(instances: Instance[], pages: PageInput[]) {
   const starts = instances.map((q, i) => ({ i, page: q.page, y: q.y }));
   for (const p of pages)
     for (const img of p.images) {
-      if (img.bbox.w < 24 || img.bbox.h < 24) continue;
+      if (isJunkFigure(p, img.bbox)) continue;
       let owner = -1;
       for (const s of starts) if (s.page < p.pageNumber || (s.page === p.pageNumber && s.y <= img.bbox.y + 4)) owner = s.i;
       if (owner >= 0) instances[owner].figures.push({ page: p.pageNumber, bbox: img.bbox });

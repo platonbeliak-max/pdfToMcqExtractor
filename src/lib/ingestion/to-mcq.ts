@@ -11,6 +11,7 @@ import {
   type FigureDraft,
   type MergedFigure,
 } from "./figures";
+import { figureKey as moodleFigureKey, looksLikeMoodleReview, moodleFigures, parseMoodleReview, pictureId, type FigureRender } from "./moodle-review";
 
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -229,15 +230,16 @@ export async function extractWithEngine(
   opts: { ocr?: "auto" | "force" | "off"; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<{ questions: MCQQuestion[]; pageCount: number; totalFound: number }> {
   const part = await extractDocumentPart(data, 0, opts);
-  const { questions: textQs, totalFound } = buildQuestions(part.instances);
-  const questions = [...textQs, ...part.figureQs].map((q, i) => ({ ...q, number: i + 1 }));
-  return { questions, pageCount: part.pageCount, totalFound: totalFound + part.figureQs.length };
+  const { questions, totalFound } = mergeDocumentParts([part]);
+  return { questions, pageCount: part.pageCount, totalFound };
 }
 
 export interface DocumentPart {
   instances: QuestionInstance[];
   figureQs: MCQQuestion[];
   pageCount: number;
+  /** Moodle attempt-review printouts: raw pages (page numbers offset to be unique across files) and their rendered pictures. */
+  moodle?: { pages: PageInput[]; renders: [string, FigureRender][] };
 }
 
 // Keeps instances from different files apart in ids and ordering while letting `aggregate` merge them.
@@ -247,7 +249,7 @@ const FILE_SEQUENCE_STRIDE = 1_000_000;
 export async function extractDocumentPart(
   data: ArrayBuffer,
   fileIndex: number,
-  opts: { ocr?: "auto" | "force" | "off"; onProgress?: (done: number, total: number) => void } = {},
+  opts: { ocr?: "auto" | "force" | "off"; onProgress?: (done: number, total: number) => void; pageOffset?: number } = {},
 ): Promise<DocumentPart> {
   const [{ openPdf, extractPages, renderRegion }, { analyzeDocument }, { putImage }] = await Promise.all([
     import("./client-extract"),
@@ -259,6 +261,23 @@ export async function extractDocumentPart(
   for await (const page of extractPages(doc, { ocr: opts.ocr ?? "auto", ocrLang: "rus+eng" })) {
     pages.push(page);
     opts.onProgress?.(page.pageNumber, doc.numPages);
+  }
+
+  // Moodle attempt reviews have a dedicated parser that reads the marks, scores and pictures of every attempt;
+  // pages are kept raw so attempts from all uploaded files are parsed (and their answers pooled) together.
+  if (looksLikeMoodleReview(pages)) {
+    const offset = opts.pageOffset ?? 0;
+    const shifted = pages.map((p) => ({ ...p, pageNumber: p.pageNumber + offset }));
+    const renders: [string, FigureRender][] = [];
+    for (const f of moodleFigures(shifted)) {
+      const img = await renderRegion(doc, f.page - offset, f.bbox).catch(() => null);
+      if (!img) continue;
+      const imageId = pictureId(img.fine);
+      const stored = await putImage(imageId, img.blob).then(() => true, () => false);
+      if (stored) renders.push([moodleFigureKey(f), { imageId, hash: img.hash, fine: img.fine }]);
+    }
+    await doc.cleanup?.();
+    return { instances: [], figureQs: [], pageCount: doc.numPages, moodle: { pages: shifted, renders } };
   }
 
   const drafts = [...detectFigures(pages), ...detectOcrFigures(pages)];
@@ -321,8 +340,15 @@ export function mergeDocumentParts(parts: DocumentPart[]): { questions: MCQQuest
       seenFigures.add(key);
       return true;
     });
-  const questions = [...textQs, ...figureQs].map((q, i) => ({ ...q, number: i + 1 }));
-  return { questions, totalFound: totalFound + parts.reduce((s, p) => s + p.figureQs.length, 0) };
+  const moodleParts = parts.filter((p) => p.moodle);
+  const moodle = moodleParts.length
+    ? parseMoodleReview(
+        moodleParts.flatMap((p) => p.moodle!.pages),
+        new Map(moodleParts.flatMap((p) => p.moodle!.renders)),
+      )
+    : null;
+  const questions = [...(moodle?.questions ?? []), ...textQs, ...figureQs].map((q, i) => ({ ...q, number: i + 1 }));
+  return { questions, totalFound: (moodle?.totalFound ?? 0) + totalFound + parts.reduce((s, p) => s + p.figureQs.length, 0) };
 }
 
 function figureToMcq(m: MergedFigure, drafts: FigureDraft[], imageId: string | undefined): MCQQuestion {

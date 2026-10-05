@@ -244,6 +244,7 @@ export default function Home() {
         // The universal engine is primary; the legacy parser only runs for a file the engine finds nothing in.
         const part = await extractDocumentPart(bytes.slice(0), i, {
           ocr,
+          pageOffset: totalPages,
           onProgress: (n, pages) =>
             setProgress({
               step: ocr === "force" ? "ocr" : "extracting",
@@ -254,7 +255,7 @@ export default function Home() {
           console.warn(`Engine failed on ${file.name}, trying legacy parser:`, e);
           return null;
         });
-        if (part && (part.instances.length > 0 || part.figureQs.length > 0)) {
+        if (part && (part.moodle || part.instances.length > 0 || part.figureQs.length > 0)) {
           parts.push(part);
           totalPages += part.pageCount;
           continue;
