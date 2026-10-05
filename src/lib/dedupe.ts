@@ -1,5 +1,6 @@
 import type { MCQQuestion, StructuredQuestion } from "@/types/question";
 import { hasAnswer } from "@/lib/answerable";
+import { repairQuestion } from "@/lib/stored-repair";
 
 const normalize = (s: string) =>
   s
@@ -42,7 +43,8 @@ export function mergeIntoBank(
   const next = bank.slice();
   const fresh: StructuredQuestion[] = [];
   let filled = 0;
-  for (const q of incoming) {
+  for (const raw of incoming) {
+    const q = repairQuestion(raw);
     const key = structuredKey(q);
     const at = index.get(key);
     if (at === undefined) {
