@@ -87,5 +87,43 @@ test("ordinary multiple-choice question passes through untouched", () => {
   assert.equal(r.answer?.key, "A");
 });
 
+test("repeated answer letter moves to the case-variant twin option", () => {
+  const r = repairQuestion(q("На эритроцитах Rh-отрицательной крови могут находиться антигены:", [["A", "С"], ["B", "D"], ["C", "E"], ["D", "с"]], { key: "A,A,C", text: "С; С; E" }));
+  assert.equal(r.answer?.key, "A,D,C");
+  assert.equal(r.answer?.text, "С; с; E");
+});
+
+test("an option's wrapped tail after the stem's colon goes back to that option", () => {
+  const r = repairQuestion(
+    q(
+      "При электротравме в первую очередь необходимо: невозможности обесточивания установки",
+      [["A", "отделить пострадавшего при помощи диэлектрика в случае"], ["B", "проверить наличие дыхания"]],
+      { key: "A", text: "отделить пострадавшего при помощи диэлектрика в случае" },
+    ),
+  );
+  assert.equal(r.question.text, "При электротравме в первую очередь необходимо:");
+  assert.equal(r.options[0].text, "отделить пострадавшего при помощи диэлектрика в случае невозможности обесточивания установки");
+  assert.equal(r.answer?.text, r.options[0].text);
+});
+
+test("data after a colon stays in the stem when no option is cut off", () => {
+  const stem = "Оцените показатели (мужчина): эритроциты 4.7×10 12 /л, гемоглобин 142 г/л";
+  const r = repairQuestion(q(stem, [["A", "все показатели в норме"], ["B", "снижен гемоглобин"]], { key: "A", text: "все показатели в норме" }));
+  assert.equal(r.question.text, stem);
+});
+
+test("stemless one-row ordering becomes a short-answer question", () => {
+  const src = { ...q("", [["A", "В состав шейного отдела симпатического ствола входит узла (цифрой)"]], { key: "", text: "3) …" }), sequence: { A: 3 }, tags: ["ordering"] };
+  const r = repairQuestion(src as StructuredQuestion);
+  assert.equal(r.question.text, "В состав шейного отдела симпатического ствола входит узла (цифрой)");
+  assert.equal(r.options.length, 0);
+  assert.equal(r.answer?.text, "3");
+});
+
+test("broken multiply sign is restored", () => {
+  const r = repairQuestion(q("Анемия:", [["A", "2,6ЧЧ10 12 /л"], ["B", "3,7×10 12 /л"]], { key: "A", text: "2,6ЧЧ10 12 /л" }));
+  assert.equal(r.options[0].text, "2,6×10 12 /л");
+});
+
 console.log(failures ? `\n${failures} failing` : "\nall passing");
 process.exit(failures ? 1 : 0);

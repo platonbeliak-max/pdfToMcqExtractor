@@ -43,7 +43,11 @@ export function stripPrintFooter(s: string): string {
 // UI, but they make a typed "93" differ from the stored "93\uF00C".
 const ICON_GLYPHS = /[\uE000-\uF8FF\u200B-\u200D\uFEFF]/g;
 
-export const cleanText = (s: string) => stripScoreNoise(stripPrintFooter(fixMojibake((s || "").replace(ICON_GLYPHS, " "))));
+// "×" read through the wrong code page comes out as "ЧЧ" in counts like "2,6ЧЧ10 12 /л".
+const BROKEN_TIMES = /(?<=\d)\s?Ч{1,2}\s?(?=10\s?\d)/g;
+
+export const cleanText = (s: string) =>
+  stripScoreNoise(stripPrintFooter(fixMojibake((s || "").replace(ICON_GLYPHS, " ")))).replace(BROKEN_TIMES, "×");
 
 const normWords = (s: string) =>
   s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -109,7 +113,66 @@ export function repairQuestion(sq: StructuredQuestion): StructuredQuestion {
   const answer = sq.answer
     ? { ...sq.answer, text: sq.options.length ? cleanText(sq.answer.text || "") : dropEchoedStem(cleanText(sq.answer.text || ""), stem) }
     : sq.answer;
-  return fitBlanksToAnswer(splitGluedTrueFalse(splitGluedLabels({ ...sq, question: { ...sq.question, text: stem }, options, answer })));
+  const base = { ...sq, question: { ...sq.question, text: stem }, options, answer };
+  return fitBlanksToAnswer(fixDuplicateKeys(moveStemTail(liftLoneOrdering(splitGluedTrueFalse(splitGluedLabels(base))))));
+}
+
+const answerKeys = (q: StructuredQuestion) => (q.answer?.key || "").split(/[,;\s]+/).filter(Boolean);
+const withKeys = (q: StructuredQuestion, keys: string[]): StructuredQuestion => ({
+  ...q,
+  answer: { ...q.answer!, key: keys.join(","), text: keys.map((k) => q.options.find((o) => o.key === k)?.text ?? "").join("; ") },
+});
+
+/**
+ * Options "С" and "с" (antigens C/c) once collapsed onto one letter, so the key reads "A,A,C".
+ * A repeated letter goes to its unused case-variant twin.
+ */
+function fixDuplicateKeys(q: StructuredQuestion): StructuredQuestion {
+  const keys = answerKeys(q);
+  if (new Set(keys).size === keys.length) return q;
+  const used = new Set<string>();
+  const fixed = keys.map((k) => {
+    if (!used.has(k)) return used.add(k), k;
+    const text = q.options.find((o) => o.key === k)?.text.toLowerCase();
+    const twin = q.options.find((o) => !used.has(o.key) && !keys.includes(o.key) && o.text.toLowerCase() === text);
+    if (!twin) return "";
+    used.add(twin.key);
+    return twin.key;
+  });
+  return withKeys(q, fixed.filter(Boolean));
+}
+
+/** An option's wrapped last line ("… в случае" + "невозможности обесточивания установки") that landed after the stem's colon. */
+const CUT_OFF = /(?:[-–,]|\s(?:в|во|и|с|со|на|по|при|из|к|от|для|о|об|или|а|что|у|до|за|под|над|как|не|чем|случае|концентрации|клетки|который|которая|которые))$/i;
+
+function moveStemTail(q: StructuredQuestion): StructuredQuestion {
+  if (q.options.length < 2 || q.matching || q.sequence) return q;
+  const m = /^([\s\S]*?:)\s+([^:]{2,})$/.exec(q.question.text);
+  if (!m || !/^[a-zа-яё(]/.test(m[2])) return q;
+  const cut = q.options.filter((o) => CUT_OFF.test(o.text.trim()));
+  if (!cut.length) return q;
+  const tail = m[2].trim();
+  const stemmed = { ...q, question: { ...q.question, text: m[1].trim() } };
+  if (cut.length > 1) return stemmed;
+  const options = q.options.map((o) => (o === cut[0] ? { ...o, text: `${o.text.trim()} ${tail}` } : o));
+  const moved = { ...stemmed, options };
+  return answerKeys(q).includes(cut[0].key) ? withKeys(moved, answerKeys(q)) : moved;
+}
+
+/** An "ordering" item with no stem and a single row is really a short-answer question: "… узла (цифрой)" → 3. */
+function liftLoneOrdering(q: StructuredQuestion): StructuredQuestion {
+  if (q.question.text || q.options.length !== 1 || !q.sequence) return q;
+  const [only] = q.options;
+  const value = q.sequence[only.key];
+  if (value == null) return q;
+  return {
+    ...q,
+    question: { ...q.question, text: only.text },
+    options: [],
+    sequence: undefined,
+    tags: (q.tags ?? []).filter((t) => t !== "ordering"),
+    answer: { key: "", text: String(value) },
+  };
 }
 
 const ADJACENT_BLANKS = /_{2,}(?:\s+_{2,})+/g;

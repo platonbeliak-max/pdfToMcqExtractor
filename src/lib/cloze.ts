@@ -35,6 +35,8 @@ export function clozeAnswers(text: string, answer: string): string[] | null {
   if (aligned?.length === count) return aligned;
   const parts = answer.split(/\s*[;,]\s*/).map(stripQuotes).filter(Boolean);
   if (parts.length === count) return parts;
+  const joined = answer.split(/\s*[;,]\s*|\s+(?:и|or|and)\s+/i).map(stripQuotes).filter(Boolean);
+  if (joined.length === count) return joined;
   if (count === 1 && !quoted.length) return [stripQuotes(answer)];
   return null;
 }
