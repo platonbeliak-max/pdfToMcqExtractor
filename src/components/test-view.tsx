@@ -27,7 +27,13 @@ export type TestMode = "all" | "text" | "fig";
 
 const byNumber = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key, undefined, { numeric: true });
 
-const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:!?«»"'()]/g, "").trim();
+const norm = (s: string) =>
+  s
+    .replace(/[\uE000-\uF8FF\u200B-\u200D\uFEFF]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,;:!?«»"'()]/g, "")
+    .trim();
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -144,7 +150,7 @@ function foldMixedAlphabet(s: string): string {
 }
 
 function asNumber(s: string): number | null {
-  const compact = s.trim().replace(/\s+/g, "").replace(/(\d),(\d)/g, "$1.$2");
+  const compact = s.replace(/[\uE000-\uF8FF\u200B-\u200D\uFEFF\s]+/g, "").replace(/(\d),(\d)/g, "$1.$2");
   return /^-?\d+(\.\d+)?$/.test(compact) ? Number(compact) : null;
 }
 

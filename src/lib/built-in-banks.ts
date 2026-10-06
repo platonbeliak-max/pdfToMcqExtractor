@@ -2,6 +2,7 @@
 
 import useSWR from "swr";
 import type { StructuredQuestion } from "@/types/question";
+import { pruneBank, repairQuestion } from "@/lib/stored-repair";
 
 export const BUILT_IN_BANKS = [
   { id: "physiology", label: "bankPhysiology" },
@@ -14,7 +15,8 @@ export type BaseId = BuiltInBankId | "mine";
 const fetchBank = async (url: string): Promise<StructuredQuestion[]> => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return ((await res.json()) as { questions: StructuredQuestion[] }).questions;
+  const { questions } = (await res.json()) as { questions: StructuredQuestion[] };
+  return pruneBank(questions.map(repairQuestion));
 };
 
 /** Both built-in banks are fetched as soon as the app opens, so switching between them is instant. */

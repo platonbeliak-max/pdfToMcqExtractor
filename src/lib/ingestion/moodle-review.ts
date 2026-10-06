@@ -941,7 +941,11 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
   const common = { id: `mdl-${index}-${norm(base.stem).slice(0, 24).replace(/\s/g, "-")}`, number: index + 1, question: base.stem, pageNumber, attempts: g.items.length };
 
   if (base.kind === "choice") {
-    const pos = (p: Parsed, i: number) => base.options.findIndex((t) => norm(t) === norm(p.options[i]));
+    // Exact text first: options like "С" and "с" (antigens) differ only by case and must not collapse.
+    const pos = (p: Parsed, i: number) => {
+      const exact = base.options.findIndex((t) => clean(t) === clean(p.options[i]));
+      return exact >= 0 ? exact : base.options.findIndex((t) => norm(t) === norm(p.options[i]));
+    };
     const completeSets = new Map<string, number>();
     const correct = new Set<number>();
     const incorrect = new Set<number>();

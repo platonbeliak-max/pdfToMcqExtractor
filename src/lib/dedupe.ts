@@ -1,6 +1,6 @@
 import type { MCQQuestion, StructuredQuestion } from "@/types/question";
 import { hasAnswer } from "@/lib/answerable";
-import { repairQuestion } from "@/lib/stored-repair";
+import { pruneBank, repairQuestion } from "@/lib/stored-repair";
 
 const normalize = (s: string) =>
   s
@@ -58,5 +58,6 @@ export function mergeIntoBank(
       filled++;
     }
   }
-  return { bank: [...fresh, ...next], added: fresh.length, filled };
+  const merged = pruneBank([...fresh, ...next]);
+  return { bank: merged, added: Math.max(0, merged.length - bank.length), filled };
 }
