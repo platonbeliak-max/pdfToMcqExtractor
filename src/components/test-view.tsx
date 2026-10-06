@@ -6,6 +6,7 @@ import { useT } from "@/lib/i18n";
 import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
+import { BLANK, clozeAnswers } from "@/lib/cloze";
 
 interface TestItem {
   id: string;
@@ -26,7 +27,13 @@ export type TestMode = "all" | "text" | "fig";
 
 const byNumber = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key, undefined, { numeric: true });
 
-const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:!?«»"'()]/g, "").trim();
+const norm = (s: string) =>
+  s
+    .replace(/[\uE000-\uF8FF\u200B-\u200D\uFEFF]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,;:!?«»"'()]/g, "")
+    .trim();
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -97,42 +104,34 @@ function correctAnswerText(item: TestItem): string {
   return item.textAnswer;
 }
 
-const BLANK = /_{2,}|…{2,}|\.{4,}/g;
+type RowToken = { type: "text"; s: string; num?: string } | { type: "blank"; i: number };
 
-const stripQuotes = (s: string) => s.replace(/^[\s«"“'„]+|[\s»"”'.,;:!?]+$/g, "").trim();
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const looseRe = (s: string) => escapeRe(s.replace(/[«»"“”„]/g, "").trim()).replace(/\s+/g, "\\s+");
+const NUMBER_MARK = /^\s*(\d{1,2}\.)\s+/;
 
-function alignToTemplate(text: string, answer: string): string[] | null {
-  const fixed = text.split(BLANK);
-  const plain = answer.replace(/[«»"“”„]/g, "");
-  const pattern = fixed
-    .map((part, i) => {
-      const lit = looseRe(part);
-      if (i === 0) return `^\\s*${lit}\\s*`;
-      const isLast = i === fixed.length - 1;
-      if (isLast) return lit ? `(.+?)\\s*${lit}[\\s.,;:!?]*$` : `(.+?)[\\s.,;:!?]*$`;
-      return `(.+?)${lit ? `\\s*${lit}` : "\\s+"}\\s*`;
-    })
-    .join("");
-  const m = plain.match(new RegExp(pattern, "is"));
-  if (!m) return null;
-  const words = m.slice(1).map(stripQuotes);
-  return words.every(Boolean) ? words : null;
+/** Splits a fill-in text like "1. … 2. ____ вена 3. …" into one row per numbered label; null when the text isn't a numbered list. */
+function numberedRows(parts: string[]): RowToken[][] | null {
+  const rows: RowToken[][] = [[]];
+  let marks = 0;
+  parts.forEach((part, p) => {
+    part.split(/(?=(?:^|\s)\d{1,2}\.\s)/).forEach((seg) => {
+      const m = seg.match(NUMBER_MARK);
+      if (m) {
+        marks++;
+        if (rows[rows.length - 1].length) rows.push([]);
+        const rest = seg.slice(m[0].length).trim();
+        rows[rows.length - 1].push({ type: "text", s: rest, num: m[1] });
+      } else if (seg.trim()) {
+        rows[rows.length - 1].push({ type: "text", s: seg.trim() });
+      }
+    });
+    if (p < parts.length - 1) rows[rows.length - 1].push({ type: "blank", i: p });
+  });
+  return marks >= 3 ? rows.filter((r) => r.length) : null;
 }
 
 function blankAnswers(item: TestItem): string[] | null {
   if (item.correct.length || item.figure || item.sequence || item.matching) return null;
-  const count = (item.text.match(BLANK) ?? []).length;
-  if (!count || !item.textAnswer) return null;
-  const quoted = [...item.textAnswer.matchAll(/«([^»]+)»|"([^"]+)"|“([^”]+)”/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim());
-  if (quoted.length === count) return quoted;
-  const aligned = alignToTemplate(item.text, item.textAnswer);
-  if (aligned?.length === count) return aligned;
-  const parts = item.textAnswer.split(/\s*[;,]\s*/).map(stripQuotes).filter(Boolean);
-  if (parts.length === count) return parts;
-  if (count === 1 && !quoted.length) return [stripQuotes(item.textAnswer)];
-  return null;
+  return clozeAnswers(item.text, item.textAnswer);
 }
 
 function isRight(item: TestItem, a: Answer | undefined): boolean {
@@ -176,7 +175,7 @@ function foldMixedAlphabet(s: string): string {
 }
 
 function asNumber(s: string): number | null {
-  const compact = s.trim().replace(/\s+/g, "").replace(/(\d),(\d)/g, "$1.$2");
+  const compact = s.replace(/[\uE000-\uF8FF\u200B-\u200D\uFEFF\s]+/g, "").replace(/(\d),(\d)/g, "$1.$2");
   return /^-?\d+(\.\d+)?$/.test(compact) ? Number(compact) : null;
 }
 
@@ -452,9 +451,8 @@ function TestRunner({
           {blanks ? (
             <>
               <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-3">{t("testBlankHint")}</p>
-              <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-loose text-pretty">
-                {textParts.map((part, i) => {
-                  if (i === textParts.length - 1) return <span key={i}>{part}</span>;
+              {(() => {
+                const renderBlank = (i: number) => {
                   const value = ans.labels?.[`b${i}`] ?? "";
                   const ok = checked && textMatches(value, blanks[i]);
                   const tone = !checked
@@ -463,9 +461,7 @@ function TestRunner({
                       ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100"
                       : "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100";
                   return (
-                    <span key={i}>
-                      {part}
-                      <span className="inline-flex flex-col align-middle mx-1 my-1">
+                      <span key={`b${i}`} className="inline-flex flex-col align-middle mx-1 my-1">
                         <input
                           id={`blank-${i}`}
                           aria-label={t("testBlank", { n: i + 1 })}
@@ -488,10 +484,43 @@ function TestRunner({
                         />
                         {checked && !ok && <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 leading-tight mt-0.5">{blanks[i]}</span>}
                       </span>
-                    </span>
                   );
-                })}
-              </p>
+                };
+                const rows = numberedRows(textParts);
+                const textClass = "text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 text-pretty";
+                if (!rows) {
+                  return (
+                    <p className={`${textClass} leading-loose`}>
+                      {textParts.map((part, i) => (
+                        <span key={i}>
+                          {part}
+                          {i < textParts.length - 1 && renderBlank(i)}
+                        </span>
+                      ))}
+                    </p>
+                  );
+                }
+                return (
+                  <ol className={`${textClass} flex flex-col gap-2 leading-relaxed`}>
+                    {rows.map((row, r) => (
+                      <li key={r} className="flex flex-wrap items-center gap-x-1 py-1 border-b border-slate-100 dark:border-slate-800 last:border-b-0">
+                        {row.map((tok, k) =>
+                          tok.type === "blank" ? (
+                            renderBlank(tok.i)
+                          ) : tok.num ? (
+                            <span key={k}>
+                              <span className="inline-block min-w-7 font-bold text-blue-600 dark:text-blue-400">{tok.num}</span>
+                              {tok.s}
+                            </span>
+                          ) : (
+                            <span key={k}>{tok.s}</span>
+                          ),
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                );
+              })()}
             </>
           ) : (
             <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
