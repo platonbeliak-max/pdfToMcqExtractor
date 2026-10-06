@@ -39,6 +39,7 @@ import {
   clearAllStorage,
 } from "@/lib/question-store";
 import type { TestMode } from "@/components/test-view";
+import { seedAnatomyBank } from "@/lib/built-in-banks";
 import {
   Sparkles,
   FileText,
@@ -105,6 +106,13 @@ export default function Home() {
     try {
       const savedBank = loadSavedQuestions();
       setAllQuestions(savedBank);
+      seedAnatomyBank(savedBank)
+        .then((seeded) => {
+          if (!seeded) return;
+          setAllQuestions(seeded);
+          persistQuestions(seeded);
+        })
+        .catch((e) => console.warn("Failed to load the anatomy bank:", e));
 
       const savedDocs = loadSavedDocuments();
       setAllDocuments(savedDocs);

@@ -1162,6 +1162,25 @@ function mergePictureless(groups: Map<string, Group>) {
   }
 }
 
+/**
+ * A labelled-figure question ("1. ___ мышца 2. ___ вена …") printed in different attempts can render
+ * its picture slightly differently (scale, crop, scan). With four or more identical blanks the text
+ * alone is unambiguous, so near-identical pictures are treated as one question.
+ */
+function mergeLabelTwins(groups: Map<string, Group>, fineOf: Map<string, string>) {
+  const textKey = (k: string) => k.slice(0, k.lastIndexOf("|"));
+  const list = [...groups.values()].filter((g) => (g.first.stem.match(/___/g)?.length ?? 0) >= 4 && g.imageId && fineOf.has(g.imageId));
+  for (const g of list.sort((a, b) => b.items.length - a.items.length)) {
+    if (!groups.has(g.key)) continue;
+    for (const o of list) {
+      if (o === g || !groups.has(o.key) || textKey(o.key) !== textKey(g.key)) continue;
+      if (fineDistance(fineOf.get(g.imageId!)!, fineOf.get(o.imageId!)!) > 0.45) continue;
+      g.items.push(...o.items);
+      groups.delete(o.key);
+    }
+  }
+}
+
 export interface MoodleReviewResult {
   questions: MCQQuestion[];
   totalFound: number;
@@ -1188,6 +1207,7 @@ export function parseMoodleReview(pages: PageInput[], renders: Map<string, Figur
   }
   adoptUnboxedAttempts(groups);
   mergePictureless(groups);
+  mergeLabelTwins(groups, new Map([...renders.values()].filter((r) => r.fine).map((r) => [r.imageId, r.fine!])));
   const questions = [...groups.values()].map((g, i) => ({ ...resolveGroup(g, i), ...(g.imageId ? { imageId: g.imageId } : {}) }));
   return { questions, totalFound: parsed.length, pagesUsed: new Set(instances.flatMap((q) => q.rows.map((r) => r.page))) };
 }

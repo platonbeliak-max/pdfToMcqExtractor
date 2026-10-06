@@ -270,7 +270,7 @@ export async function extractDocumentPart(
     const shifted = pages.map((p) => ({ ...p, pageNumber: p.pageNumber + offset }));
     const renders: [string, FigureRender][] = [];
     for (const f of moodleFigures(shifted)) {
-      const img = await renderRegion(doc, f.page - offset, f.bbox).catch(() => null);
+      const img = await renderRegion(doc, f.page - offset, f.bbox, [], 1000, true).catch(() => null);
       if (!img) continue;
       const imageId = pictureId(img.fine);
       const stored = await putImage(imageId, img.blob).then(() => true, () => false);

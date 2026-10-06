@@ -1,7 +1,7 @@
 "use client";
 
 import type { PageAnnotation, PageInput, RawImageRegion, RawTextItem } from "./types";
-import { isBlankFingerprint } from "../blank-image";
+import { isBlankFingerprint, isJunkPicture } from "../blank-image";
 
 /**
  * Reads a PDF in the browser and yields one raw PageInput per page: text items
@@ -300,6 +300,15 @@ function fineFingerprint(source: HTMLCanvasElement): string {
   return out;
 }
 
+function isPageChrome(source: HTMLCanvasElement): boolean {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return false;
+  ctx.drawImage(source, 0, 0, 64, 64);
+  return isJunkPicture(ctx.getImageData(0, 0, 64, 64).data, source.width, source.height);
+}
+
 /**
  * Renders part of a page (PDF points, top-left origin) to a JPEG. `masks`
  * are painted over first so captions printed on slides don't give answers away.
@@ -310,6 +319,7 @@ export async function renderRegion(
   bbox: { x: number; y: number; w: number; h: number } | null,
   masks: { x: number; y: number; w: number; h: number }[] = [],
   maxWidth = 1000,
+  rejectPageChrome = false,
 ): Promise<{ blob: Blob; hash: string; fine: string } | null> {
   const page = await doc.getPage(pageNumber);
   try {
@@ -340,7 +350,7 @@ export async function renderRegion(
     full.width = full.height = 0;
     const hash = averageHash(crop);
     const fine = fineFingerprint(crop);
-    if (isBlankFingerprint(fine)) {
+    if (isBlankFingerprint(fine) || (rejectPageChrome && isPageChrome(crop))) {
       crop.width = crop.height = 0;
       return null;
     }
