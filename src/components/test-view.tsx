@@ -104,6 +104,31 @@ function correctAnswerText(item: TestItem): string {
   return item.textAnswer;
 }
 
+type RowToken = { type: "text"; s: string; num?: string } | { type: "blank"; i: number };
+
+const NUMBER_MARK = /^\s*(\d{1,2}\.)\s+/;
+
+/** Splits a fill-in text like "1. … 2. ____ вена 3. …" into one row per numbered label; null when the text isn't a numbered list. */
+function numberedRows(parts: string[]): RowToken[][] | null {
+  const rows: RowToken[][] = [[]];
+  let marks = 0;
+  parts.forEach((part, p) => {
+    part.split(/(?=(?:^|\s)\d{1,2}\.\s)/).forEach((seg) => {
+      const m = seg.match(NUMBER_MARK);
+      if (m) {
+        marks++;
+        if (rows[rows.length - 1].length) rows.push([]);
+        const rest = seg.slice(m[0].length).trim();
+        rows[rows.length - 1].push({ type: "text", s: rest, num: m[1] });
+      } else if (seg.trim()) {
+        rows[rows.length - 1].push({ type: "text", s: seg.trim() });
+      }
+    });
+    if (p < parts.length - 1) rows[rows.length - 1].push({ type: "blank", i: p });
+  });
+  return marks >= 3 ? rows.filter((r) => r.length) : null;
+}
+
 function blankAnswers(item: TestItem): string[] | null {
   if (item.correct.length || item.figure || item.sequence || item.matching) return null;
   return clozeAnswers(item.text, item.textAnswer);
@@ -426,9 +451,8 @@ function TestRunner({
           {blanks ? (
             <>
               <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-3">{t("testBlankHint")}</p>
-              <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-loose text-pretty">
-                {textParts.map((part, i) => {
-                  if (i === textParts.length - 1) return <span key={i}>{part}</span>;
+              {(() => {
+                const renderBlank = (i: number) => {
                   const value = ans.labels?.[`b${i}`] ?? "";
                   const ok = checked && textMatches(value, blanks[i]);
                   const tone = !checked
@@ -437,9 +461,7 @@ function TestRunner({
                       ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100"
                       : "border-red-500 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100";
                   return (
-                    <span key={i}>
-                      {part}
-                      <span className="inline-flex flex-col align-middle mx-1 my-1">
+                      <span key={`b${i}`} className="inline-flex flex-col align-middle mx-1 my-1">
                         <input
                           id={`blank-${i}`}
                           aria-label={t("testBlank", { n: i + 1 })}
@@ -462,10 +484,43 @@ function TestRunner({
                         />
                         {checked && !ok && <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 leading-tight mt-0.5">{blanks[i]}</span>}
                       </span>
-                    </span>
                   );
-                })}
-              </p>
+                };
+                const rows = numberedRows(textParts);
+                const textClass = "text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 text-pretty";
+                if (!rows) {
+                  return (
+                    <p className={`${textClass} leading-loose`}>
+                      {textParts.map((part, i) => (
+                        <span key={i}>
+                          {part}
+                          {i < textParts.length - 1 && renderBlank(i)}
+                        </span>
+                      ))}
+                    </p>
+                  );
+                }
+                return (
+                  <ol className={`${textClass} flex flex-col gap-2 leading-relaxed`}>
+                    {rows.map((row, r) => (
+                      <li key={r} className="flex flex-wrap items-center gap-x-1 py-1 border-b border-slate-100 dark:border-slate-800 last:border-b-0">
+                        {row.map((tok, k) =>
+                          tok.type === "blank" ? (
+                            renderBlank(tok.i)
+                          ) : tok.num ? (
+                            <span key={k}>
+                              <span className="inline-block min-w-7 font-bold text-blue-600 dark:text-blue-400">{tok.num}</span>
+                              {tok.s}
+                            </span>
+                          ) : (
+                            <span key={k}>{tok.s}</span>
+                          ),
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                );
+              })()}
             </>
           ) : (
             <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
