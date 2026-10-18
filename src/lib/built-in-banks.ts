@@ -4,10 +4,8 @@ import useSWR from "swr";
 import type { StructuredQuestion } from "@/types/question";
 
 export const BUILT_IN_BANKS = [
-  { id: "etest2", label: "bankEtest2" },
-  { id: "physexam4", label: "bankPhysExam4" },
+  { id: "phys", label: "bankPhys" },
   { id: "physiology", label: "bankPhysiology" },
-  { id: "anatomy", label: "bankAnatomy" },
 ] as const;
 
 export type BuiltInBankId = (typeof BUILT_IN_BANKS)[number]["id"];

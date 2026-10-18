@@ -10,7 +10,7 @@ function perfectAnswer(it: TestItem): Answer {
   if (it.matching) return { picked: [], typed: "", slots: Object.fromEntries(it.options.map((o) => [o.key, it.matching!.pairs[o.key]])) };
   if (it.figure) return { picked: [], typed: "", labels: Object.fromEntries(it.options.map((o) => [o.key, o.text])) };
   if (it.correct.length) return { picked: [...it.correct], typed: "" };
-  return { picked: [], typed: it.textAnswer };
+  return { picked: [], typed: it.textAnswer.split(/\s+\/\s+/).at(-1)! };
 }
 
 function wrongAnswer(it: TestItem): Answer | null {

@@ -147,7 +147,7 @@ export function isRight(item: TestItem, a: Answer | undefined): boolean {
     const p = [...a.picked].sort().join(",");
     return p === [...item.correct].sort().join(",");
   }
-  return textMatches(a.typed, item.textAnswer);
+  return item.textAnswer.split(/\s+\/\s+/).some((variant) => textMatches(a.typed, variant));
 }
 
 function editDistance(a: string, b: string): number {

@@ -145,7 +145,29 @@ const norm = (s: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 
-const num = (s: string | undefined) => (s === undefined ? null : Number(s.replace(",", ".")));
+  const num = (s: string | undefined) => (s === undefined ? null : Number(s.replace(",", ".")));
+
+  const squash = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, "");
+  /** What is left of a «Правильные ответы» list after removing every whole option it names. */
+  const unmatchedTail = (feedback: string, options: string[]) => {
+    let rest = squash(feedback);
+    for (const o of options.map(squash).filter(Boolean).sort((a, b) => b.length - a.length)) rest = rest.split(o).join("");
+    return rest;
+  };
+  /**
+   * A wrapped answer list continues on the next row; the next question's stem follows it directly
+   * (the «Вопрос N» header sits in the side column), so a row is accepted only if it finishes a cut option.
+   */
+  const extendsOptionList = (before: string, after: string, options: string[]) => {
+    const tail = unmatchedTail(after, options);
+    const prev = unmatchedTail(before, options);
+    if (!prev) {
+      if (!/,\s*$/.test(before) || squash(after) === squash(before)) return false;
+      return !tail || options.some((o) => squash(o).startsWith(tail));
+    }
+    if (!tail) return true;
+    return tail.length > prev.length && options.some((o) => squash(o).startsWith(tail));
+  };
 
 const HEADER_RE = /^Вопрос\s*(\d+)$/;
 const STATE_RE = /^(?:Верно|Неверно|Частично правильный|Частично|правильный|Выполнен|Нет ответа|Не отвечено|Не завершено|Ответ сохранен|Отметить вопрос|Отметить|вопрос|Пропущено)$/i;
@@ -334,8 +356,10 @@ function readInstances(pages: PageInput[]): Instance[] {
       }
       if (VERDICT_RE.test(t)) continue;
       if (section === "feedback") {
-        if (!q.options.length && !FIELD_RE.test(t)) q.feedback = clean(`${q.feedback ?? ""} ${t}`);
-        continue;
+  if (FIELD_RE.test(t)) continue;
+  const joined = clean(`${q.feedback ?? ""} ${t}`);
+  if (!q.options.length || extendsOptionList(q.feedback ?? "", joined, q.options.map((o) => o.text))) q.feedback = joined;
+  continue;
       }
       if (INSTRUCTION_RE.test(t)) {
         q.multi = /несколько/i.test(t);
