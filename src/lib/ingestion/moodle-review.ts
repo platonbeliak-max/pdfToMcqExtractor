@@ -155,9 +155,12 @@ const FIELD_RE = /^⟪(.*)⟫$/;
 const MATCH_STEM_RE = /Соотнесите|Сопоставьте|соответстви/i;
 const ORDER_FIELD_RE = /^⟪\s*\[?\s*(\d{1,2})\s*\]?\s*⟫$/;
 const LABEL_RE = /^[a-zа-я]\.\s*/i;
+/** Browser print headers/footers: the page URL with a timestamp, and "Стр. 2 из 9". */
+const PRINT_FOOTER_RE = /^(?:https?:\/\/\S+(?:\s+\d{1,2}\.\d{1,2}\.\d{2,4},?\s*\S*)?|Стр\.\s*\d+\s*из\s*\d+|\d{1,2}\.\d{1,2}\.\d{2,4},\s*\d{1,2}[:E]\d{2})$/u;
 
 function rowsOf(page: PageInput, sideCut: number | null): Row[] {
-  const items = page.items.filter((i) => i.str.trim());
+  // Browser-printed reviews draw the ✓ icon as a lone "!" item; the answer is read from the feedback line instead.
+  const items = page.items.filter((i) => i.str.trim() && i.str.trim() !== "!");
   const groups: { side: boolean; items: RawTextItem[] }[] = [];
   const add = (side: boolean, list: RawTextItem[]) => {
     const sorted = list.slice().sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2) || a.x - b.x);
@@ -188,7 +191,7 @@ function rowsOf(page: PageInput, sideCut: number | null): Row[] {
         bottom: Math.max(...s.map((i) => i.y + i.h)),
         x: s[0].x,
         items: s,
-        text: clean(s.map((i) => i.str).join(" ")),
+        text: clean(s.map((i) => i.str).join(" ").replace(/[\u0000-\u001f]/g, " ")).replace(/^Текст\s+вопроса(?:\s+|$)/u, ""),
         side,
       };
     })
@@ -258,14 +261,18 @@ function isTitleRow(t: string): boolean {
   return letters.filter((c) => c === c.toUpperCase() && c !== c.toLowerCase()).length / letters.length >= 0.6;
 }
 
+// Some PDF printers emit the ✓/✗ icons as the control characters U+0019/U+001A instead of icon-font glyphs.
+const CHECK_RE = new RegExp(`[${CHECK}\\u0019]`);
+const CROSS_RE = new RegExp(`[${CROSS}\\u001a]`);
+
 function markOf(row: Row): Mark {
   const t = row.items.map((i) => i.str).join("");
-  if (t.includes(CROSS)) return "incorrect";
-  if (t.includes(CHECK)) return "correct";
+  if (CROSS_RE.test(t)) return "incorrect";
+  if (CHECK_RE.test(t)) return "correct";
   return null;
 }
 
-const stripGlyphs = (s: string) => clean(s.replace(new RegExp(`[${CHECK}${CROSS}]`, "g"), ""));
+const stripGlyphs = (s: string) => clean(s.replace(new RegExp(`[${CHECK}${CROSS}\\u0000-\\u001f]`, "g"), ""));
 
 function readInstances(pages: PageInput[]): Instance[] {
   const cuts = sideCutsByPage(pages);
@@ -278,6 +285,7 @@ function readInstances(pages: PageInput[]): Instance[] {
   for (const [pageIdx, page] of pages.entries()) {
     for (const row of rowsOf(page, cuts[pageIdx])) {
       const t = row.text;
+      if (PRINT_FOOTER_RE.test(t)) continue;
       const head = HEADER_RE.exec(t);
       if (head) {
         q = newInstance(Number(head[1]), row.page, row.y);
@@ -340,7 +348,7 @@ function readInstances(pages: PageInput[]): Instance[] {
       }
       const first = row.items[0].str.trim();
       if (first === SELECTED || first === UNSELECTED) {
-        const textItems = row.items.slice(1);
+        const textItems = row.items.slice(1).filter((i) => i.str.trim() !== SELECTED && i.str.trim() !== UNSELECTED);
         optionX = textItems[0]?.x ?? row.x;
         q.options.push({
           text: stripGlyphs(textItems.map((i) => i.str).join(" ")).replace(LABEL_RE, ""),
@@ -356,7 +364,7 @@ function readInstances(pages: PageInput[]): Instance[] {
       }
       const ans = ANSWER_RE.exec(t);
       if (ans && !q.options.length) {
-        q.response = clean(ans[1].replace(/[⟪⟫]/g, "")) || null;
+        q.response = stripGlyphs(ans[1].replace(/[⟪⟫]/g, "")) || null;
         if (!q.response) section = "options";
         continue;
       }
@@ -375,7 +383,7 @@ function readInstances(pages: PageInput[]): Instance[] {
         }
       }
       if (section === "options" && q.response === null && !q.options.length && FIELD_RE.test(t)) {
-        q.response = clean(FIELD_RE.exec(t)![1]);
+        q.response = stripGlyphs(FIELD_RE.exec(t)![1]);
         continue;
       }
       q.body.push(row);
