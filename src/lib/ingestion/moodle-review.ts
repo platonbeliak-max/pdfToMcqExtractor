@@ -11,8 +11,16 @@ import type { PageAnnotation, PageInput, RawTextItem } from "./types";
  * (stamps placed on missed options, typed corrections), pooled over attempts.
  */
 
-const CHECK = "\uf00c";
-const CROSS = "\uf00d";
+// ✓/✗ icons: FontAwesome PUA code points, or 0x19/0x1A when the printer kept the icon font's own encoding.
+const CHECK_RE = /[\uf00c\u0019]/;
+const CROSS_RE = /[\uf00d\u001a]/;
+const GLYPH_RE = /[\uf00c\uf00d\u0019\u001a]/g;
+/** Browser "Print page" output draws the ✓ icon as a lone "!" item after the answer. */
+const isBang = (i: RawTextItem) => i.str.trim() === "!";
+/** Browser print headers/footers and site chrome, repeated on every page; never part of a question. */
+const PRINT_NOISE_RE =
+  /^(?:https?:\/\/\S+|\S*review\.php\?attempt=.*|Стр\.\s*\d+\s*из\s*\d+|Support|Вы зашли под именем.*|Сводка хранения данных|Скачать мобильное приложение|Нормальная[_ ]физиология(?:_\S+)?|Цель занятия\s*▶?|◀.*|.*▶)$/u;
+const isPrintedPage = (page: PageInput) => page.items.some((i) => /review\.php\?attempt=|^Стр\.\s*\d+\s*из\s*\d+$/.test(i.str.trim()));
 const SELECTED = "■";
 const UNSELECTED = "□";
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -188,7 +196,7 @@ function rowsOf(page: PageInput, sideCut: number | null): Row[] {
         bottom: Math.max(...s.map((i) => i.y + i.h)),
         x: s[0].x,
         items: s,
-        text: clean(s.map((i) => i.str).join(" ")),
+        text: clean(s.filter((i) => !isBang(i)).map((i) => i.str).join(" ")),
         side,
       };
     })
@@ -243,17 +251,23 @@ function isTitleRow(t: string): boolean {
   return letters.filter((c) => c === c.toUpperCase() && c !== c.toLowerCase()).length / letters.length >= 0.6;
 }
 
-function markOf(row: Row): Mark {
-  const t = row.items.map((i) => i.str).join("");
-  if (t.includes(CROSS)) return "incorrect";
-  if (t.includes(CHECK)) return "correct";
+function itemMark(i: RawTextItem): Mark {
+  if (CROSS_RE.test(i.str)) return "incorrect";
+  if (CHECK_RE.test(i.str) || isBang(i)) return "correct";
   return null;
 }
 
-const stripGlyphs = (s: string) => clean(s.replace(new RegExp(`[${CHECK}${CROSS}]`, "g"), ""));
+function markOf(row: Row): Mark {
+  const marks = row.items.map(itemMark);
+  if (marks.includes("incorrect")) return "incorrect";
+  if (marks.includes("correct")) return "correct";
+  return null;
+}
+
+const stripGlyphs = (s: string) => clean(s.replace(GLYPH_RE, ""));
 
 function readInstances(pages: PageInput[]): Instance[] {
-  const cut = sideColumnCut(pages);
+  const globalCut = sideColumnCut(pages);
   const out: Instance[] = [];
   let q: Instance | null = null;
   let inHeader = false;
@@ -261,8 +275,13 @@ function readInstances(pages: PageInput[]): Instance[] {
   let optionX = 0;
 
   for (const page of pages) {
+    // Files often join attempts printed different ways, so the info-box column is decided per page.
+    const own = sideColumnCut([page]);
+    const hasBoth = page.items.some((i) => i.str.trim() === "Вопрос") && page.items.some((i) => /^Выберите\s/.test(i.str.trim()));
+    const cut = isPrintedPage(page) ? null : hasBoth ? own : globalCut;
     for (const row of rowsOf(page, cut)) {
       const t = row.text;
+      if (PRINT_NOISE_RE.test(t)) continue;
       const head = HEADER_RE.exec(t);
       if (head) {
         q = newInstance(Number(head[1]), row.page, row.y);
@@ -325,7 +344,7 @@ function readInstances(pages: PageInput[]): Instance[] {
       }
       const first = row.items[0].str.trim();
       if (first === SELECTED || first === UNSELECTED) {
-        const textItems = row.items.slice(1);
+        const textItems = row.items.slice(1).filter((i) => !isBang(i));
         optionX = textItems[0]?.x ?? row.x;
         q.options.push({
           text: stripGlyphs(textItems.map((i) => i.str).join(" ")).replace(LABEL_RE, ""),
@@ -423,7 +442,7 @@ const isZero = (q: Instance) => q.earned !== null && q.max !== null && q.max > 0
 const noteBoxes = (q: Instance) => (q as Instance & { noteBoxes?: { text: string; y: number }[] }).noteBoxes ?? [];
 
 const isField = (i: RawTextItem) => FIELD_RE.test(i.str.trim());
-const isGlyph = (i: RawTextItem) => !stripGlyphs(i.str);
+const isGlyph = (i: RawTextItem) => !stripGlyphs(i.str) || isBang(i);
 const wordItems = (r: Row) => r.items.filter((i) => !isGlyph(i));
 
 /** x where the right-hand cell of a plain matching table starts (cells may sit on different lines). */
@@ -487,7 +506,7 @@ function clozeOf(rows: Row[]): FillInfo | null {
       marks.push(null);
       parts.push("___");
     } else if (isGlyph(i)) {
-      const m = i.str.includes(CROSS) ? "incorrect" : i.str.includes(CHECK) ? "correct" : null;
+      const m = itemMark(i);
       if (m && marks.length && marks[marks.length - 1] === null) marks[marks.length - 1] = m;
     } else parts.push(i.str);
   }
