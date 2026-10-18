@@ -1,6 +1,6 @@
 import { StructuredQuestion, answerKeys } from "@/types/question";
 
-const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:!?«»"'()]/g, "").trim();
+const norm = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 /** Same question re-extracted from another attempt collapses onto one key. */
 export function dedupeKey(q: StructuredQuestion): string {

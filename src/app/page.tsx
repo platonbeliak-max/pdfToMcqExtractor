@@ -39,6 +39,7 @@ import {
   clearAllStorage,
 } from "@/lib/question-store";
 import type { TestMode } from "@/components/test-view";
+import { seedAnatomyBank } from "@/lib/built-in-banks";
 import {
   Sparkles,
   FileText,
@@ -105,6 +106,13 @@ export default function Home() {
     try {
       const savedBank = loadSavedQuestions();
       setAllQuestions(savedBank);
+      seedAnatomyBank(savedBank)
+        .then((seeded) => {
+          if (!seeded) return;
+          setAllQuestions(seeded);
+          persistQuestions(seeded);
+        })
+        .catch((e) => console.warn("Failed to load the anatomy bank:", e));
 
       const savedDocs = loadSavedDocuments();
       setAllDocuments(savedDocs);
@@ -244,6 +252,7 @@ export default function Home() {
         // The universal engine is primary; the legacy parser only runs for a file the engine finds nothing in.
         const part = await extractDocumentPart(bytes.slice(0), i, {
           ocr,
+          pageOffset: totalPages,
           onProgress: (n, pages) =>
             setProgress({
               step: ocr === "force" ? "ocr" : "extracting",
@@ -254,7 +263,7 @@ export default function Home() {
           console.warn(`Engine failed on ${file.name}, trying legacy parser:`, e);
           return null;
         });
-        if (part && (part.instances.length > 0 || part.figureQs.length > 0)) {
+        if (part && (part.moodle || part.instances.length > 0 || part.figureQs.length > 0)) {
           parts.push(part);
           totalPages += part.pageCount;
           continue;

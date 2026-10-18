@@ -155,9 +155,12 @@ const FIELD_RE = /^⟪(.*)⟫$/;
 const MATCH_STEM_RE = /Соотнесите|Сопоставьте|соответстви/i;
 const ORDER_FIELD_RE = /^⟪\s*\[?\s*(\d{1,2})\s*\]?\s*⟫$/;
 const LABEL_RE = /^[a-zа-я]\.\s*/i;
+/** Browser print headers/footers: the page URL with a timestamp, and "Стр. 2 из 9". */
+const PRINT_FOOTER_RE = /^(?:https?:\/\/\S+(?:\s+\d{1,2}\.\d{1,2}\.\d{2,4},?\s*\S*)?|Стр\.\s*\d+\s*из\s*\d+|\d{1,2}\.\d{1,2}\.\d{2,4},\s*\d{1,2}[:E]\d{2})$/u;
 
 function rowsOf(page: PageInput, sideCut: number | null): Row[] {
-  const items = page.items.filter((i) => i.str.trim());
+  // Browser-printed reviews draw the ✓ icon as a lone "!" item; the answer is read from the feedback line instead.
+  const items = page.items.filter((i) => i.str.trim() && i.str.trim() !== "!");
   const groups: { side: boolean; items: RawTextItem[] }[] = [];
   const add = (side: boolean, list: RawTextItem[]) => {
     const sorted = list.slice().sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2) || a.x - b.x);
@@ -188,7 +191,7 @@ function rowsOf(page: PageInput, sideCut: number | null): Row[] {
         bottom: Math.max(...s.map((i) => i.y + i.h)),
         x: s[0].x,
         items: s,
-        text: clean(s.map((i) => i.str).join(" ")),
+        text: clean(s.map((i) => i.str).join(" ").replace(/[\u0000-\u001f]/g, " ")).replace(/^Текст\s+вопроса(?:\s+|$)/u, ""),
         side,
       };
     })
@@ -209,12 +212,27 @@ function sideColumnCut(pages: PageInput[]): number | null {
     for (const i of p.items) {
       const t = i.str.trim();
       if (t === "Вопрос") headerX.push(i.x);
-      else if (/^Выберите\s/.test(t)) contentX.push(i.x);
+      else if (/^Выберите(?:\s|$)/.test(t)) contentX.push(i.x);
     }
   const h = median(headerX);
   const c = median(contentX);
   if (h === null || c === null || c - h < 45) return null;
   return c - 8;
+}
+
+/** Layout differs between uploaded files, so decide per page; pages without evidence inherit from the nearest page that has it. */
+function sideCutsByPage(pages: PageInput[]): (number | null)[] {
+  const has = (p: PageInput) => p.items.some((i) => i.str.trim() === "Вопрос") && p.items.some((i) => /^Выберите(?:\s|$)/.test(i.str.trim()));
+  const own = pages.map((p) => (has(p) ? { cut: sideColumnCut([p]) } : null));
+  return pages.map((_, idx) => {
+    for (let d = 0; d < pages.length; d++) {
+      const back = own[idx - d];
+      if (back) return back.cut;
+      const fwd = own[idx + d];
+      if (fwd) return fwd.cut;
+    }
+    return null;
+  });
 }
 
 export function looksLikeMoodleReview(pages: PageInput[]): boolean {
@@ -243,26 +261,31 @@ function isTitleRow(t: string): boolean {
   return letters.filter((c) => c === c.toUpperCase() && c !== c.toLowerCase()).length / letters.length >= 0.6;
 }
 
+// Some PDF printers emit the ✓/✗ icons as the control characters U+0019/U+001A instead of icon-font glyphs.
+const CHECK_RE = new RegExp(`[${CHECK}\\u0019]`);
+const CROSS_RE = new RegExp(`[${CROSS}\\u001a]`);
+
 function markOf(row: Row): Mark {
   const t = row.items.map((i) => i.str).join("");
-  if (t.includes(CROSS)) return "incorrect";
-  if (t.includes(CHECK)) return "correct";
+  if (CROSS_RE.test(t)) return "incorrect";
+  if (CHECK_RE.test(t)) return "correct";
   return null;
 }
 
-const stripGlyphs = (s: string) => clean(s.replace(new RegExp(`[${CHECK}${CROSS}]`, "g"), ""));
+const stripGlyphs = (s: string) => clean(s.replace(new RegExp(`[${CHECK}${CROSS}\\u0000-\\u001f]`, "g"), ""));
 
 function readInstances(pages: PageInput[]): Instance[] {
-  const cut = sideColumnCut(pages);
+  const cuts = sideCutsByPage(pages);
   const out: Instance[] = [];
   let q: Instance | null = null;
   let inHeader = false;
   let section: "stem" | "options" | "feedback" = "stem";
   let optionX = 0;
 
-  for (const page of pages) {
-    for (const row of rowsOf(page, cut)) {
+  for (const [pageIdx, page] of pages.entries()) {
+    for (const row of rowsOf(page, cuts[pageIdx])) {
       const t = row.text;
+      if (PRINT_FOOTER_RE.test(t)) continue;
       const head = HEADER_RE.exec(t);
       if (head) {
         q = newInstance(Number(head[1]), row.page, row.y);
@@ -325,7 +348,7 @@ function readInstances(pages: PageInput[]): Instance[] {
       }
       const first = row.items[0].str.trim();
       if (first === SELECTED || first === UNSELECTED) {
-        const textItems = row.items.slice(1);
+        const textItems = row.items.slice(1).filter((i) => i.str.trim() !== SELECTED && i.str.trim() !== UNSELECTED);
         optionX = textItems[0]?.x ?? row.x;
         q.options.push({
           text: stripGlyphs(textItems.map((i) => i.str).join(" ")).replace(LABEL_RE, ""),
@@ -341,7 +364,7 @@ function readInstances(pages: PageInput[]): Instance[] {
       }
       const ans = ANSWER_RE.exec(t);
       if (ans && !q.options.length) {
-        q.response = clean(ans[1].replace(/[⟪⟫]/g, "")) || null;
+        q.response = stripGlyphs(ans[1].replace(/[⟪⟫]/g, "")) || null;
         if (!q.response) section = "options";
         continue;
       }
@@ -360,7 +383,7 @@ function readInstances(pages: PageInput[]): Instance[] {
         }
       }
       if (section === "options" && q.response === null && !q.options.length && FIELD_RE.test(t)) {
-        q.response = clean(FIELD_RE.exec(t)![1]);
+        q.response = stripGlyphs(FIELD_RE.exec(t)![1]);
         continue;
       }
       q.body.push(row);
@@ -585,7 +608,8 @@ function parseStructured(q: Instance): Structured {
     groups.splice(0, groups.length, ...split);
   }
 
-  const orderLike = tail.some((r) => r.items.some((i) => ORDER_FIELD_RE.test(i.str.trim())));
+  // A lone numeric field ("…узла (указать цифрой) ⟪3⟫") is a short answer, not a one-row ordering task.
+  const orderLike = groups.length >= 2 && tail.some((r) => r.items.some((i) => ORDER_FIELD_RE.test(i.str.trim())));
   const plain = !tail.some((r) => r.items.some(isField));
   const rightX = plain ? rightColumnX(tail, groups.length) : Infinity;
 
@@ -879,11 +903,24 @@ function pictureClusters(renders: FigureRender[]): (r: FigureRender) => FigureRe
   return (r) => cache.get(id(r)) ?? r;
 }
 
+/**
+ * Pasted screenshots of the Moodle page itself (with the student's marks on the answers) and thin slivers
+ * cut from them are not question figures: showing them would leak the answer or display garbage.
+ */
+function isJunkFigure(page: PageInput, b: { x: number; y: number; w: number; h: number }): boolean {
+  if (b.w < 24 || b.h < 24) return true;
+  if (b.w < 70 && b.h / b.w > 1.8) return true;
+  const words = page.items.filter(
+    (i) => /\p{L}{3,}/u.test(i.str) && i.x >= b.x - 2 && i.x + i.w <= b.x + b.w + 2 && i.y >= b.y - 2 && i.y + i.h <= b.y + b.h + 2,
+  );
+  return words.length >= 3 || words.some((i) => /Баллов|Вопрос|Выполнен|Выберите/i.test(i.str));
+}
+
 function attachFigures(instances: Instance[], pages: PageInput[]) {
   const starts = instances.map((q, i) => ({ i, page: q.page, y: q.y }));
   for (const p of pages)
     for (const img of p.images) {
-      if (img.bbox.w < 24 || img.bbox.h < 24) continue;
+      if (isJunkFigure(p, img.bbox)) continue;
       let owner = -1;
       for (const s of starts) if (s.page < p.pageNumber || (s.page === p.pageNumber && s.y <= img.bbox.y + 4)) owner = s.i;
       if (owner >= 0) instances[owner].figures.push({ page: p.pageNumber, bbox: img.bbox });
@@ -912,7 +949,11 @@ function resolveGroup(g: Group, index: number): MCQQuestion {
   const common = { id: `mdl-${index}-${norm(base.stem).slice(0, 24).replace(/\s/g, "-")}`, number: index + 1, question: base.stem, pageNumber, attempts: g.items.length };
 
   if (base.kind === "choice") {
-    const pos = (p: Parsed, i: number) => base.options.findIndex((t) => norm(t) === norm(p.options[i]));
+    // Exact text first: options like "С" and "с" (antigens) differ only by case and must not collapse.
+    const pos = (p: Parsed, i: number) => {
+      const exact = base.options.findIndex((t) => clean(t) === clean(p.options[i]));
+      return exact >= 0 ? exact : base.options.findIndex((t) => norm(t) === norm(p.options[i]));
+    };
     const completeSets = new Map<string, number>();
     const correct = new Set<number>();
     const incorrect = new Set<number>();
@@ -1129,6 +1170,25 @@ function mergePictureless(groups: Map<string, Group>) {
   }
 }
 
+/**
+ * A labelled-figure question ("1. ___ мышца 2. ___ вена …") printed in different attempts can render
+ * its picture slightly differently (scale, crop, scan). With four or more identical blanks the text
+ * alone is unambiguous, so near-identical pictures are treated as one question.
+ */
+function mergeLabelTwins(groups: Map<string, Group>, fineOf: Map<string, string>) {
+  const textKey = (k: string) => k.slice(0, k.lastIndexOf("|"));
+  const list = [...groups.values()].filter((g) => (g.first.stem.match(/___/g)?.length ?? 0) >= 4 && g.imageId && fineOf.has(g.imageId));
+  for (const g of list.sort((a, b) => b.items.length - a.items.length)) {
+    if (!groups.has(g.key)) continue;
+    for (const o of list) {
+      if (o === g || !groups.has(o.key) || textKey(o.key) !== textKey(g.key)) continue;
+      if (fineDistance(fineOf.get(g.imageId!)!, fineOf.get(o.imageId!)!) > 0.45) continue;
+      g.items.push(...o.items);
+      groups.delete(o.key);
+    }
+  }
+}
+
 export interface MoodleReviewResult {
   questions: MCQQuestion[];
   totalFound: number;
@@ -1155,6 +1215,7 @@ export function parseMoodleReview(pages: PageInput[], renders: Map<string, Figur
   }
   adoptUnboxedAttempts(groups);
   mergePictureless(groups);
+  mergeLabelTwins(groups, new Map([...renders.values()].filter((r) => r.fine).map((r) => [r.imageId, r.fine!])));
   const questions = [...groups.values()].map((g, i) => ({ ...resolveGroup(g, i), ...(g.imageId ? { imageId: g.imageId } : {}) }));
   return { questions, totalFound: parsed.length, pagesUsed: new Set(instances.flatMap((q) => q.rows.map((r) => r.page))) };
 }

@@ -12,7 +12,8 @@ import {
   downloadCsvFile,
 } from "./csv-manager";
 import { downloadBulkSvgZip } from "./svg/svg-generator";
-import { stripScoreNoise } from "./ingestion/noise";
+import { repairQuestion } from "./stored-repair";
+import { mergeIntoBank } from "./dedupe";
 import { clearImages, deleteImages } from "./figure-store";
 import { hasAnswer } from "./answerable";
 
@@ -52,13 +53,17 @@ export function loadSavedQuestions(): StructuredQuestion[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      return parsed.map((item) => {
+      const repaired = parsed.map((item) => {
         const sq =
           "options" in item && Array.isArray(item.options)
             ? (item as StructuredQuestion)
             : toStructuredQuestion(item as MCQQuestion);
         return cleanStoredQuestion(sq);
       });
+      // Copies that differed only by the printed page footer collapse once the footer is gone.
+      const { bank } = mergeIntoBank([], repaired);
+      if (bank.length !== parsed.length) persistQuestions(bank);
+      return bank;
     }
   } catch (e) {
     console.warn("Failed to load questions from storage:", e);
@@ -68,12 +73,7 @@ export function loadSavedQuestions(): StructuredQuestion[] {
 
 /** Banks saved before score stripping existed still contain "Балл: 1,00" in their text. */
 function cleanStoredQuestion(sq: StructuredQuestion): StructuredQuestion {
-  return {
-    ...sq,
-    question: { ...sq.question, text: stripScoreNoise(sq.question.text) },
-    options: sq.options.map((o) => ({ ...o, text: stripScoreNoise(o.text) })),
-    answer: sq.answer ? { ...sq.answer, text: stripScoreNoise(sq.answer.text || "") } : sq.answer,
-  };
+  return repairQuestion(sq);
 }
 
 /** Removes a document and every question extracted from it. */
