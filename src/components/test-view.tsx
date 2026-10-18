@@ -6,8 +6,10 @@ import { useT } from "@/lib/i18n";
 import { CheckCircle2, XCircle, RotateCcw, Play, ArrowRight, ClipboardList, Eye, Lightbulb } from "lucide-react";
 import { FigureImage } from "./figure-image";
 import { dedupeKey, hasAnswer } from "@/lib/answerable";
+import { BaseSwitcher } from "./base-switcher";
+import { BUILT_IN_BANKS, useBuiltInBank, type BaseId } from "@/lib/built-in-banks";
 
-interface TestItem {
+export interface TestItem {
   id: string;
   text: string;
   options: { key: string; text: string }[];
@@ -21,7 +23,7 @@ interface TestItem {
 }
 
 /** `slots` holds the chosen position number (sequence) or value (matching) per option key. */
-type Answer = { picked: string[]; typed: string; labels?: Record<string, string>; slots?: Record<string, string> };
+export type Answer = { picked: string[]; typed: string; labels?: Record<string, string>; slots?: Record<string, string> };
 export type TestMode = "all" | "text" | "fig";
 
 const byNumber = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key, undefined, { numeric: true });
@@ -37,7 +39,7 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped: number } {
+export function buildPool(questions: StructuredQuestion[]): { pool: TestItem[]; skipped: number } {
   const seen = new Set<string>();
   const pool: TestItem[] = [];
   let skipped = 0;
@@ -121,7 +123,7 @@ function alignToTemplate(text: string, answer: string): string[] | null {
   return words.every(Boolean) ? words : null;
 }
 
-function blankAnswers(item: TestItem): string[] | null {
+export function blankAnswers(item: TestItem): string[] | null {
   if (item.correct.length || item.figure || item.sequence || item.matching) return null;
   const count = (item.text.match(BLANK) ?? []).length;
   if (!count || !item.textAnswer) return null;
@@ -135,7 +137,7 @@ function blankAnswers(item: TestItem): string[] | null {
   return null;
 }
 
-function isRight(item: TestItem, a: Answer | undefined): boolean {
+export function isRight(item: TestItem, a: Answer | undefined): boolean {
   if (!a) return false;
   const blanks = blankAnswers(item);
   if (blanks) return blanks.every((w, i) => textMatches(a.labels?.[`b${i}`] ?? "", w));
@@ -201,7 +203,45 @@ export function TestView({
   onGoUpload: () => void;
   initialMode?: TestMode;
 }) {
-  return <TestRunner questions={questions} onGoUpload={onGoUpload} initialMode={initialMode} picker={null} />;
+  const { t } = useT();
+  const [base, setBase] = useState<BaseId>(BUILT_IN_BANKS[0].id);
+  const bank = useBuiltInBank(base);
+  const active = base === "mine" ? questions : bank.data ?? [];
+  const counts: Partial<Record<BaseId, number | null>> = { mine: questions.length };
+  if (base !== "mine") counts[base] = bank.data ? bank.data.length : null;
+  const picker = (
+    <div className="-mx-6 sm:-mx-8 -mt-2">
+      <BaseSwitcher active={base} onChange={setBase} counts={counts} showMine={questions.length > 0} />
+    </div>
+  );
+  if (base !== "mine" && !bank.data) {
+    return (
+      <div className="max-w-xl mx-auto p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col gap-6">
+        {picker}
+        <p className="text-sm text-slate-500 dark:text-slate-400" role="status">
+          {bank.error ? String(bank.error) : t("testSourceLoading")}
+        </p>
+      </div>
+    );
+  }
+  return <TestRunner key={base} questions={active} onGoUpload={onGoUpload} initialMode={initialMode} picker={picker} />;
+}
+
+function hintText(item: TestItem, t: ReturnType<typeof useT>["t"]): string[] {
+  const blanks = blankAnswers(item);
+  const word = (w: string) => t("testHintWord", { s: w.slice(0, 1).toUpperCase(), n: w.length });
+  if (blanks) return blanks.map(word);
+  if (item.sequence) {
+    const first = item.options.find((o) => item.sequence![o.key] === 1);
+    return first ? [t("testHintFirst", { s: first.text })] : [];
+  }
+  if (item.matching) {
+    const o = item.options[0];
+    return o ? [t("testHintPair", { a: o.text, b: item.matching.pairs[o.key] })] : [];
+  }
+  if (item.figure) return item.figure.captions;
+  if (item.correct.length) return [t("testHintCount", { n: item.correct.length })];
+  return item.textAnswer ? [word(item.textAnswer)] : [];
 }
 
 function TestRunner({
@@ -404,6 +444,14 @@ function TestRunner({
   };
   const structured = !!(item.sequence || item.matching);
   const blanks = blankAnswers(item);
+  const hint = hintText(item, t);
+  const hintOpen = !!hints[item.id];
+  const toggleHint = () => {
+    const nextHints = { ...hints };
+    if (nextHints[item.id]) delete nextHints[item.id];
+    else nextHints[item.id] = true;
+    setHints(nextHints);
+  };
   const setSlot = (key: string, value: string) =>
     setAnswers({ ...answers, [item.id]: { ...ans, slots: { ...ans.slots, [key]: value } } });
   const setBlank = (i: number, value: string) =>
@@ -496,10 +544,28 @@ function TestRunner({
           ) : (
             <p className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 leading-relaxed text-pretty">{item.text}</p>
           )}
-          {multi && (
-            <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-2">
-              {t("testMulti", { n: item.correct.length })} · {t("testMultiPicked", { k: ans.picked.length, n: item.correct.length })}
-            </p>
+          {!checked && hint.length > 0 && (
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                title={t("hHint")}
+                aria-expanded={hintOpen}
+                onClick={toggleHint}
+                className="self-start inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-400"
+              >
+                <Lightbulb className="w-3.5 h-3.5" aria-hidden="true" />
+                {hintOpen ? t("testHintHide") : t("testHint")}
+              </button>
+              {hintOpen && (
+                <ul className="flex flex-wrap gap-1.5" aria-label={t("testHint")}>
+                  {hint.map((h, i) => (
+                    <li key={i} className="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                      {h}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
         {!item.figure && item.imageId && <FigureImage imageId={item.imageId} className="max-h-96 object-contain" />}
@@ -575,35 +641,7 @@ function TestRunner({
         ) : item.figure ? (
           <div className="flex flex-col gap-4">
             {item.figure.imageId && <FigureImage imageId={item.figure.imageId} />}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-bold text-blue-600 dark:text-blue-400">{t("testFigHint")}</p>
-              {!checked && (
-                <button
-                  type="button"
-                  title={t("hFigHint")}
-                  aria-expanded={!!hints[item.id]}
-                  onClick={() => {
-                    const next = { ...hints };
-                    if (next[item.id]) delete next[item.id];
-                    else next[item.id] = true;
-                    setHints(next);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-400"
-                >
-                  <Lightbulb className="w-3.5 h-3.5" />
-                  {hints[item.id] ? t("testFigHintHide") : t("testFigHintShow")}
-                </button>
-              )}
-            </div>
-            {hints[item.id] && !checked && (
-              <ul className="flex flex-wrap gap-1.5" aria-label={t("testFigHintShow")}>
-                {item.figure.captions.map((c) => (
-                  <li key={c} className="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-xs text-amber-900 dark:text-amber-200">
-                    {c}
-                  </li>
-                ))}
-              </ul>
-            )}
+            <p className="text-xs font-bold text-blue-600 dark:text-blue-400">{t("testFigHint")}</p>
             <ol className="flex flex-col gap-2">
               {item.options.map((o) => {
                 const chosen = ans.labels?.[o.key] ?? "";

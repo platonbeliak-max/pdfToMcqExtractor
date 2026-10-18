@@ -7,7 +7,8 @@ import { BUILT_IN_BANKS, type BaseId } from "@/lib/built-in-banks";
 interface BaseSwitcherProps {
   active: BaseId;
   onChange: (id: BaseId) => void;
-  counts: Record<BaseId, number | null>;
+  /** `null` = loading, missing = not loaded yet (no badge). */
+  counts: Partial<Record<BaseId, number | null>>;
   showMine: boolean;
 }
 
@@ -45,7 +46,7 @@ export function BaseSwitcher({ active, onChange, counts, showMine }: BaseSwitche
                 {it.label}
                 {n === null ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" aria-label={t("testSourceLoading")} />
-                ) : (
+                ) : n === undefined ? null : (
                   <span
                     className={`px-1.5 rounded-full text-[11px] font-extrabold ${
                       selected ? "bg-white/20 text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"

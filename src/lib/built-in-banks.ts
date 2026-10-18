@@ -4,6 +4,8 @@ import useSWR from "swr";
 import type { StructuredQuestion } from "@/types/question";
 
 export const BUILT_IN_BANKS = [
+  { id: "etest2", label: "bankEtest2" },
+  { id: "physexam4", label: "bankPhysExam4" },
   { id: "physiology", label: "bankPhysiology" },
   { id: "anatomy", label: "bankAnatomy" },
 ] as const;
@@ -17,9 +19,9 @@ const fetchBank = async (url: string): Promise<StructuredQuestion[]> => {
   return ((await res.json()) as { questions: StructuredQuestion[] }).questions;
 };
 
-/** Both built-in banks are fetched as soon as the app opens, so switching between them is instant. */
-export function useBuiltInBanks() {
-  const physiology = useSWR("/banks/physiology.json", fetchBank, { revalidateOnFocus: false, revalidateIfStale: false });
-  const anatomy = useSWR("/banks/anatomy.json", fetchBank, { revalidateOnFocus: false, revalidateIfStale: false });
-  return { physiology, anatomy } as const;
+const SWR_OPTS = { revalidateOnFocus: false, revalidateIfStale: false } as const;
+
+/** Only the selected bank is downloaded; previously opened banks stay cached for instant switching. */
+export function useBuiltInBank(id: BaseId) {
+  return useSWR(id === "mine" ? null : `/banks/${id}.json`, fetchBank, SWR_OPTS);
 }
